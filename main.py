@@ -71,7 +71,7 @@ TOOLBOX_ENV_FIELDS = {
         "MSSQL_PASSWORD": "password",
     },
 }  # nosec B105
-TOOLBOX_RUNTIME_PREBUILT_ALIASES = {}
+TOOLBOX_RUNTIME_PREBUILT_ALIASES: dict[str, str] = {}
 
 
 def _connector_type_id(prebuilt: str) -> str:
