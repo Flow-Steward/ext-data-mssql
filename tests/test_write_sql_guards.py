@@ -68,7 +68,7 @@ def test_dollar_write_never_invokes_provider_even_with_claim(tmp_path, monkeypat
                     "connection_id": "database-1",
                     "connection_type": connection_type,
                     "config": config,
-                    "secrets": {},
+                    "secrets": {"password": "guard-fixture-value"},
                 }
             },
         },
