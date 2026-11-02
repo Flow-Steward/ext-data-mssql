@@ -53,6 +53,7 @@ TOOLBOX_DATASET_PREBUILTS = frozenset(_VARIANT.get("prebuilts") or TOOLBOX_SOURC
 EXTENSION_DISPLAY_NAME = str(_VARIANT.get("display_name") or "Toolbox Dataset Connector")
 # Toolbox environment variable -> connection field name. The "password" values
 # name a field; they are not secrets.
+_AUTH_FIELD = "password"
 TOOLBOX_ENV_FIELDS = {
     "cloud-sql-mssql": {
         "CLOUD_SQL_MSSQL_PROJECT": "project",
@@ -60,7 +61,7 @@ TOOLBOX_ENV_FIELDS = {
         "CLOUD_SQL_MSSQL_INSTANCE": "instance",
         "CLOUD_SQL_MSSQL_DATABASE": "database",
         "CLOUD_SQL_MSSQL_USER": "user",
-        "CLOUD_SQL_MSSQL_PASSWORD": "password",  # nosec B105
+        "CLOUD_SQL_MSSQL_PASSWORD": _AUTH_FIELD,
         "CLOUD_SQL_MSSQL_IP_TYPE": "ip_type",
     },
     "mssql": {
@@ -68,9 +69,9 @@ TOOLBOX_ENV_FIELDS = {
         "MSSQL_PORT": "port",
         "MSSQL_DATABASE": "database",
         "MSSQL_USER": "user",
-        "MSSQL_PASSWORD": "password",
+        "MSSQL_PASSWORD": _AUTH_FIELD,
     },
-}  # nosec B105
+}
 TOOLBOX_RUNTIME_PREBUILT_ALIASES: dict[str, str] = {}
 
 
@@ -236,12 +237,35 @@ def _toolbox_command(_config: dict[str, Any]) -> list[str]:
     return [str(binary)]
 
 
+_PASSWORD_REQUIRED_PROFILES = frozenset(["mssql", "cloud-sql-mssql"])
+
+
+def _validate_connection_credentials(config: dict[str, Any], secret_refs: dict[str, Any]) -> None:
+    """Reject missing native credentials before invoking a database provider."""
+    profile = _prebuilt(config)
+    if profile not in _PASSWORD_REQUIRED_PROFILES:
+        return
+    runtime_profile = _runtime_prebuilt(config)
+    fields = TOOLBOX_ENV_FIELDS[runtime_profile]
+    env_name = next(key for key, field in fields.items() if field == _AUTH_FIELD)
+    values = _secret_ref_values(secret_refs)
+    secret_env = {**_as_dict(secret_refs.get("env")), **_as_dict(values.get("env"))}
+    value = secret_env.get(env_name)
+    if value is None:
+        value = values.get(_AUTH_FIELD, values.get(env_name))
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"Profile {profile} requires password in connection secrets or secret env {env_name}"
+        )
+
+
 def _toolbox_env(config: dict[str, Any], secret_refs: dict[str, Any]) -> dict[str, str]:
     prebuilt = _runtime_prebuilt(config)
     env = dict(os.environ)
     explicit_env = _as_dict(config.get("env"))
     secret_env = _as_dict(secret_refs.get("env"))
     secrets = _secret_ref_values(secret_refs)
+    secret_env = {**secret_env, **_as_dict(secrets.get("env"))}
     for env_name, config_key in TOOLBOX_ENV_FIELDS.get(prebuilt, {}).items():
         value = explicit_env.get(env_name)
         if value is None:
@@ -281,6 +305,7 @@ def _invoke_toolbox(
     *,
     timeout_seconds: int = 30,
 ) -> Any:
+    _validate_connection_credentials(config, secret_refs)
     prebuilt = _runtime_prebuilt(config)
     command = [*_toolbox_command(config), f"--prebuilt={prebuilt}", "--stdio"]
     process = subprocess.Popen(  # nosemgrep: fixed packaged argv, never shell=True. # nosec B603
@@ -1510,6 +1535,7 @@ def _execute_sql(request: dict[str, Any], *, preview: bool) -> dict[str, Any]:
 def _execute_write(request: dict[str, Any]) -> dict[str, Any]:
     try:
         raw, config, secrets, test_mode = write_input(request, TOOLBOX_DATASET_PREBUILTS)
+        _validate_connection_credentials(config, secrets)
         sql, occurrences = write_statement(raw.get("sql"), prebuilt=str(config["prebuilt"]))
         params = _validated_params(
             raw.get("param_schema", {}), [name for _, _, name in occurrences], raw.get("params", {})

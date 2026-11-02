@@ -214,6 +214,7 @@ def test_execute_sql_sends_statement_and_values_separately(monkeypatch) -> None:
                 "action_id": "execute_template",
                 "input": {
                     "connection_config": toolbox_postgres_config(),
+                    "secret_refs": {"values": {"password": "transport-fixture-value"}},
                     "dataset": {
                         "resource_scope_jsonb": {
                             "resources": [{"resource_id": "events", "columns": None}]
@@ -263,6 +264,7 @@ def test_dynamic_identifier_parameter_is_rejected_before_toolbox(monkeypatch) ->
             "action_id": "execute_template",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "resources": [{"resource_id": "events", "columns": None}]
@@ -468,6 +470,7 @@ def test_row_cap_ignores_limit_inside_literals_and_trailing_comments(monkeypatch
                 "action_id": "execute_template",
                 "input": {
                     "connection_config": toolbox_postgres_config(),
+                    "secret_refs": {"values": {"password": "transport-fixture-value"}},
                     "dataset": {
                         "resource_scope_jsonb": {
                             "resources": [{"resource_id": "events", "columns": None}]
@@ -607,7 +610,10 @@ def test_toolbox_dataset_connector_uses_canonical_envelopes() -> None:
         "mode": "action",
         "action": {
             "action_id": "introspect_schema",
-            "input": {"connection_config": toolbox_postgres_config()},
+            "input": {
+                "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
+            },
         },
     }
     completed = subprocess.run(  # nosemgrep: fixed Python executable and extension runtime path. # nosec B603
@@ -1097,7 +1103,7 @@ def test_toolbox_stdio_returns_structured_content(monkeypatch) -> None:
 
     result = module._invoke_toolbox(  # type: ignore[attr-defined]
         config=toolbox_postgres_config(),
-        secret_refs={},
+        secret_refs={"values": {"password": "transport-fixture-value"}},
         tool_name="execute_sql",
         params={"sql": "SELECT 1"},
         timeout_seconds=2,
@@ -1115,6 +1121,7 @@ def _qa_orders_request() -> dict:
             "action_id": "execute_template",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1270,7 +1277,7 @@ def test_toolbox_stdio_collects_all_text_content_blocks(monkeypatch) -> None:
 
     result = module._invoke_toolbox(  # type: ignore[attr-defined]
         config=toolbox_postgres_config(),
-        secret_refs={},
+        secret_refs={"values": {"password": "transport-fixture-value"}},
         tool_name="list_tables",
         timeout_seconds=2,
     )
@@ -1374,7 +1381,14 @@ def test_introspection_normalizes_json_encoded_toolbox_object_details(monkeypatc
     )
 
     snapshot = module._introspect(  # type: ignore[attr-defined]
-        {"action": {"input": {"connection_config": toolbox_postgres_config()}}}
+        {
+            "action": {
+                "input": {
+                    "connection_config": toolbox_postgres_config(),
+                    "secret_refs": {"values": {"password": "transport-fixture-value"}},
+                }
+            }
+        }
     )
 
     assert snapshot["metadata"]["resource_count"] == 1
@@ -1427,7 +1441,10 @@ def test_toolbox_stdio_timeout_terminates_process(monkeypatch) -> None:
     _raises_input_1170_1 = toolbox_postgres_config()
     with pytest.raises(RuntimeError, match="request timed out"):
         module._invoke_toolbox(
-            config=_raises_input_1170_1, secret_refs={}, tool_name="list_tables", timeout_seconds=1
+            config=_raises_input_1170_1,
+            secret_refs={"values": {"password": "transport-fixture-value"}},
+            tool_name="list_tables",
+            timeout_seconds=1,
         )
 
 
@@ -1524,7 +1541,10 @@ def test_toolbox_stdio_rejects_oversized_output(monkeypatch) -> None:
     _raises_input_1228_1 = toolbox_postgres_config()
     with pytest.raises(RuntimeError, match="response exceeded"):
         module._invoke_toolbox(
-            config=_raises_input_1228_1, secret_refs={}, tool_name="list_tables", timeout_seconds=2
+            config=_raises_input_1228_1,
+            secret_refs={"values": {"password": "transport-fixture-value"}},
+            tool_name="list_tables",
+            timeout_seconds=2,
         )
 
 
@@ -1592,6 +1612,7 @@ def test_toolbox_dataset_connector_executes_saved_template_read_only() -> None:
             "action_id": "execute_template",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1637,6 +1658,7 @@ def test_toolbox_dataset_connector_validate_query_exercises_runtime_path() -> No
             "action_id": "validate_query",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1675,6 +1697,7 @@ def test_toolbox_dataset_connector_rejects_out_of_scope_query() -> None:
             "action_id": "validate_query",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1712,6 +1735,7 @@ def test_toolbox_dataset_connector_rejects_out_of_scope_columns() -> None:
             "action_id": "execute_template",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1752,6 +1776,7 @@ def test_toolbox_dataset_connector_rejects_denied_column_behind_allowed_select_t
             "action_id": "execute_template",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1806,6 +1831,7 @@ def test_toolbox_dataset_connector_accepts_allowed_columns_in_predicate_expressi
             "action_id": "execute_template",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1852,6 +1878,7 @@ def test_toolbox_dataset_connector_accepts_schema_qualified_scope_when_unambiguo
             "action_id": "validate_query",
             "input": {
                 "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
                 "dataset": {
                     "resource_scope_jsonb": {
                         "version": 1,
@@ -1939,7 +1966,10 @@ def test_every_final_scope_owner_introspects_through_the_entrypoint(scope) -> No
         "mode": "action",
         "action": {
             "action_id": "introspect_schema",
-            "input": {"connection_config": toolbox_postgres_config()},
+            "input": {
+                "connection_config": toolbox_postgres_config(),
+                "secret_refs": {"values": {"password": "transport-fixture-value"}},
+            },
         },
     }
     completed = subprocess.run(  # nosemgrep: fixed Python executable and extension runtime path. # nosec B603
@@ -1999,7 +2029,10 @@ def test_foreign_or_incomplete_envelope_is_refused_before_toolbox_starts(
     monkeypatch.setattr(module.subprocess, "Popen", no_toolbox)
     request = {"contract_version": contract_version, "runtime_context": dict(scope), **operation}
     if operation["mode"] == "action":
-        request["action"]["input"] = {"connection_config": toolbox_postgres_config()}
+        request["action"]["input"] = {
+            "connection_config": toolbox_postgres_config(),
+            "secret_refs": {"values": {"password": "transport-fixture-value"}},
+        }
 
     response = module.handle_request(request)
 
