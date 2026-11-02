@@ -1,0 +1,88 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Microsoft SQL Server connection
+type: object
+additionalProperties: false
+required:
+- prebuilt
+properties:
+  prebuilt:
+    type: string
+    enum:
+    - mssql
+    - cloud-sql-mssql
+    description: Select a Microsoft SQL Server connection profile.
+    title: Connection profile
+  database:
+    type: string
+    description: Database name for the selected external source.
+  host:
+    type: string
+    description: Database host for networked Toolbox prebuilts.
+  port:
+    type: string
+    description: Database port for networked Toolbox prebuilts.
+  user:
+    type: string
+    description: Database user for networked Toolbox prebuilts.
+  project:
+    type: string
+    description: Cloud project for managed Google Cloud sources.
+  region:
+    type: string
+    description: Cloud region for managed Google Cloud sources.
+  instance:
+    type: string
+    description: Instance identifier for managed database sources.
+  ip_type:
+    type: string
+    description: Public or private IP mode for managed database sources.
+  env:
+    type: object
+    title: Profile environment overrides
+    additionalProperties: false
+    properties:
+      CLOUD_SQL_MSSQL_PROJECT:
+        type: string
+      CLOUD_SQL_MSSQL_REGION:
+        type: string
+      CLOUD_SQL_MSSQL_INSTANCE:
+        type: string
+      CLOUD_SQL_MSSQL_DATABASE:
+        type: string
+      CLOUD_SQL_MSSQL_USER:
+        type: string
+      CLOUD_SQL_MSSQL_IP_TYPE:
+        type: string
+      MSSQL_HOST:
+        type: string
+      MSSQL_PORT:
+        type: string
+      MSSQL_DATABASE:
+        type: string
+      MSSQL_USER:
+        type: string
+allOf:
+- if:
+    properties:
+      prebuilt:
+        const: mssql
+    required:
+    - prebuilt
+  then:
+    required:
+    - database
+    - host
+    - user
+- if:
+    properties:
+      prebuilt:
+        const: cloud-sql-mssql
+    required:
+    - prebuilt
+  then:
+    required:
+    - database
+    - project
+    - region
+    - instance
+    - user

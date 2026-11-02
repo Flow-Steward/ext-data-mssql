@@ -1,0 +1,23 @@
+{
+  "binaries": {
+    "linux-amd64": {
+      "path": "bin/linux-amd64/toolbox",
+      "sha256": "b747ffaf448cc98099c9e6eb66be56037d4e6573170c437d90f751c0001154bf",
+      "size": 30019710
+    },
+    "linux-arm64": {
+      "path": "bin/linux-arm64/toolbox",
+      "sha256": "d0687453f350ed4abda5206928bf74141014defad208084a2d61da2dbda84b79",
+      "size": 28049534
+    }
+  },
+  "go_image": "golang:1.26.2-bookworm@sha256:47ce5636e9936b2c5cbf708925578ef386b4f8872aec74a67bd13a627d242b19",
+  "patch_sha256": "44ea573fdf39a15a5011b76b8d8a568d8c631d6ec3ad44078607af55d5e34c58",
+  "registered_prebuilts": [
+    "cloud-sql-mssql",
+    "mssql"
+  ],
+  "source": "https://github.com/googleapis/mcp-toolbox",
+  "upstream_commit": "b0010060a939455d91e4f8ba62dc3e72b1892469",
+  "upstream_tag": "v1.3.0"
+}

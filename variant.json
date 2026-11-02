@@ -1,0 +1,7 @@
+{
+  "prebuilts": [
+    "mssql",
+    "cloud-sql-mssql"
+  ],
+  "display_name": "Microsoft SQL Server"
+}
