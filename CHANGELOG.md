@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+- Rebuild pinned Toolbox v1.3.0 with Go 1.26.10 and security dependency floors, preserving database safety patches and host behavior.
+
 ## 1.3.1
 
 - Use official database brand artwork with recorded source attribution.
