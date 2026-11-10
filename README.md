@@ -1,6 +1,6 @@
 # Microsoft SQL Server
 
-Standalone Flow Steward extension, version 1.3.2. Install only this database package. The extension identifier remains `flowsteward.data-connector-mcp-toolbox-mssql` for installed upgrades.
+Standalone Flow Steward extension, version 1.3.3. Install only this database package. The extension identifier remains `flowsteward.data-connector-mcp-toolbox-mssql` for installed upgrades.
 
 Supports profiles: `mssql`, `cloud-sql-mssql`. Read-only datasets support schema inspection, validation, bounded previews and saved-query execution. Workflows support one bound INSERT, UPDATE or DELETE, with project connection references and durable effect claims. No triggers or DDL are exposed.
 
