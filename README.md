@@ -19,3 +19,28 @@ The bundled AMD64 and ARM64 native executables are unchanged, checksum-verified 
 Build: `scripts/build_toolbox.sh`. Package: `python3 scripts/package_extension.py --runtime-target linux-amd64` and `linux-arm64`. Development tests run through Flow Steward’s Docker extension gate. No live cloud account verification is claimed.
 
 Credential validation: Password is required for mssql, cloud-sql-mssql. Supply password or the matching profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB IAM profiles keep password optional; public config env is not a credential source. Required profiles reject missing/blank secrets before provider dispatch, including workflow test mode. The secret environment alternative belongs in project secrets, for example `env: {PROFILE_PASSWORD: ...}` using the exact variable from the selected pinned profile. Wrong-profile environment keys do not satisfy the requirement.
+
+## Automated CI and releases
+
+Pushes to `main` and pull requests run the shared extension build workflow. The checked-in `.github/release-config.json` selects both Linux targets, the repository's package script and test inputs. Missing native payloads and published-only inventory are restored from checksum-pinned release archives; tracked source files are preserved. The source packager retains its provenance checks.
+
+After the versioned release commit is on `main`, publish by pushing its version tag:
+
+```sh
+git tag v1.3.6
+git push origin v1.3.6
+```
+
+The release workflow runs the shared checks, builds the target archives and publishes the GitHub release and checksums. Do not move an existing tag. To rerun a release for an existing tag, dispatch the same workflow:
+
+```sh
+gh workflow run release.yml --repo Flow-Steward/ext-data-mssql --ref main -f tag=v1.3.6
+```
+
+The manifest, descriptor (when present), package version and tag must identify the same release. Release publication uses the workflow token; no additional repository secret is required by these callers.
+
+### Standalone CI coverage
+
+The release recipe lists the standalone test files and individual test nodes explicitly, including package, source and provenance contracts. The shared runner clears repository pytest addopts so packaged contract checks are not silently deselected. This scope does not claim live provider or database verification.
+
+The selected contract suite uses mocked provider responses and does not require a provider account.
