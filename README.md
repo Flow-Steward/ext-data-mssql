@@ -1,10 +1,16 @@
 # Microsoft SQL Server
 
-Standalone Flow Steward extension, version 1.3.4. Install only this database package. The extension identifier remains `flowsteward.data-connector-mcp-toolbox-mssql` for installed upgrades.
+Connect Microsoft SQL Server to Flow Steward through a direct database connection or the Cloud SQL for SQL Server profile. Read-only Datasets support connection testing, typed schema inspection, saved-query validation, previews, execution and output-schema inference. Selected table and column scopes keep saved queries focused on the data a workflow needs, such as operational lookups, reporting extracts or application records used in later steps.
+
+A separate workflow action runs one INSERT, UPDATE or DELETE with named parameters and an optional parameter schema. Use it to store workflow results or update application records in the configured database. Parameter values are supplied separately from SQL, so a reusable statement can accept different inputs on each run. Workflow writes do not change the read-only nature of Dataset queries.
+
+Direct connections require the host, database and user with a password in connection secrets. The Cloud SQL profile uses Google project, region, instance and IP-type settings and also requires database credentials. Reads return at most 100 rows and 480 KiB. SQL support is a restricted subset; DDL, transaction scripts and database triggers are outside the connector's operation set.
+
+## Connection and operation reference
 
 Supports profiles: `mssql`, `cloud-sql-mssql`. Read-only datasets support schema inspection, validation, bounded previews and saved-query execution. Workflows support one bound INSERT, UPDATE or DELETE, with project connection references and durable effect claims. No triggers or DDL are exposed.
 
-Direct connections use host, port, database and user, with password in project secrets. Managed profiles preserve their project, region, instance, IP type and (for AlloyDB) cluster settings. Cloud PostgreSQL/MySQL profiles may use inherited application-default credentials and optional database user/password; Cloud SQL MSSQL requires database credentials. The checked-in pinned prebuilt definitions under `scripts/upstream-prebuilts/` document exact environment names and defaults. Configuration forms contain only this database’s fields.
+Direct SQL Server connections use host, port, database and user, with password in project secrets. Cloud SQL for SQL Server uses Google project, region, instance and IP-type settings and requires database user/password credentials. The runtime also needs the appropriate Google Cloud access for the managed connection. The pinned definitions under `scripts/upstream-prebuilts/` document exact environment names and defaults.
 
 SQL is a deliberately strict subset: raw backslashes and dollar characters are rejected before parsing; pass those characters through bound parameter values. Reads return at most 100 rows and 480 KiB. Writes have no automatic retry; an uncertain result is reported as unknown. Test mode suppresses writes before driver invocation.
 
