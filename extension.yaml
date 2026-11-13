@@ -4,15 +4,26 @@ lifecycle:
   data_migrations: []
 extension_id: flowsteward.data-connector-mcp-toolbox-mssql
 kind: tool_provider
-version: 1.3.6
+version: "1.3.7"
 release_stage: active
 display_name: Microsoft SQL Server
-description: |-
-  Connect Microsoft SQL Server to Flow Steward through a direct database connection or the Cloud SQL for SQL Server profile. Read-only Datasets support connection testing, typed schema inspection, saved-query validation, previews, execution and output-schema inference. Selected table and column scopes keep saved queries focused on the data a workflow needs, such as operational lookups, reporting extracts or application records used in later steps.
+description: 'Connect Microsoft SQL Server to Flow Steward through a direct database connection or the
+  Cloud SQL for SQL Server profile. Read-only Datasets support connection testing, typed schema inspection,
+  saved-query validation, previews, execution and output-schema inference. Selected table and column scopes
+  keep saved queries focused on the data a workflow needs, such as operational lookups, reporting extracts
+  or application records used in later steps.
 
-  A separate workflow action runs one INSERT, UPDATE or DELETE with named parameters and an optional parameter schema. Use it to store workflow results or update application records in the configured database. Parameter values are supplied separately from SQL, so a reusable statement can accept different inputs on each run. Workflow writes do not change the read-only nature of Dataset queries.
 
-  Direct connections require the host, database and user with a password in connection secrets. The Cloud SQL profile uses Google project, region, instance and IP-type settings and also requires database credentials. Reads return at most 100 rows and 480 KiB. SQL support is a restricted subset; DDL, transaction scripts and database triggers are outside the connector's operation set.
+  A separate workflow action runs one INSERT, UPDATE or DELETE with named parameters and an optional parameter
+  schema. Use it to store workflow results or update application records in the configured database. Parameter
+  values are supplied separately from SQL, so a reusable statement can accept different inputs on each
+  run. Workflow writes do not change the read-only nature of Dataset queries.
+
+
+  Direct connections require the host, database and user with a password in connection secrets. The Cloud
+  SQL profile uses Google project, region, instance and IP-type settings and also requires database credentials.
+  Reads return at most 100 rows and 480 KiB. SQL support is a restricted subset; DDL, transaction scripts
+  and database triggers are outside the connector''s operation set.'
 vendor:
   name: Flow Steward
   support_url: https://github.com/Flow-Steward/ext-data-mssql/issues
@@ -24,23 +35,35 @@ listing:
   - database
   - sql
   - dataset
-  summary: |-
-    Connect SQL Server or Cloud SQL for SQL Server for schema inspection, saved Dataset queries and parameterized writes.
-  description: |-
-    Connect Microsoft SQL Server to Flow Steward through a direct database connection or the Cloud SQL for SQL Server profile. Read-only Datasets support connection testing, typed schema inspection, saved-query validation, previews, execution and output-schema inference. Selected table and column scopes keep saved queries focused on the data a workflow needs, such as operational lookups, reporting extracts or application records used in later steps.
+  summary: Connect SQL Server or Cloud SQL for SQL Server for schema inspection, saved Dataset queries
+    and parameterized writes.
+  description: 'Connect Microsoft SQL Server to Flow Steward through a direct database connection or the
+    Cloud SQL for SQL Server profile. Read-only Datasets support connection testing, typed schema inspection,
+    saved-query validation, previews, execution and output-schema inference. Selected table and column
+    scopes keep saved queries focused on the data a workflow needs, such as operational lookups, reporting
+    extracts or application records used in later steps.
 
-    A separate workflow action runs one INSERT, UPDATE or DELETE with named parameters and an optional parameter schema. Use it to store workflow results or update application records in the configured database. Parameter values are supplied separately from SQL, so a reusable statement can accept different inputs on each run. Workflow writes do not change the read-only nature of Dataset queries.
 
-    Direct connections require the host, database and user with a password in connection secrets. The Cloud SQL profile uses Google project, region, instance and IP-type settings and also requires database credentials. Reads return at most 100 rows and 480 KiB. SQL support is a restricted subset; DDL, transaction scripts and database triggers are outside the connector's operation set.
-  setup_summary: |-
-    Select the direct SQL Server or Cloud SQL for SQL Server profile and configure the database endpoint or Google project/region/instance settings. Store the database user’s password in secrets; the Cloud SQL profile also needs the runtime’s required Google Cloud access.
+    A separate workflow action runs one INSERT, UPDATE or DELETE with named parameters and an optional
+    parameter schema. Use it to store workflow results or update application records in the configured
+    database. Parameter values are supplied separately from SQL, so a reusable statement can accept different
+    inputs on each run. Workflow writes do not change the read-only nature of Dataset queries.
+
+
+    Direct connections require the host, database and user with a password in connection secrets. The
+    Cloud SQL profile uses Google project, region, instance and IP-type settings and also requires database
+    credentials. Reads return at most 100 rows and 480 KiB. SQL support is a restricted subset; DDL, transaction
+    scripts and database triggers are outside the connector''s operation set.'
+  setup_summary: Select the direct SQL Server or Cloud SQL for SQL Server profile and configure the database
+    endpoint or Google project/region/instance settings. Store the database user’s password in secrets;
+    the Cloud SQL profile also needs the runtime’s required Google Cloud access.
 package:
   format: flow-steward-extension
   license: Apache-2.0
   includes_source: true
 billing_mode: free
-upgrade_notes: Preserves the installed extension and connection identifiers. Settings
-  and packaging now belong exclusively to Microsoft SQL Server.
+upgrade_notes: Preserves the installed extension and connection identifiers. Settings and packaging now
+  belong exclusively to Microsoft SQL Server.
 screenshots:
 - label: Overview
   description: Microsoft SQL Server connection profiles and supported operations.
@@ -58,8 +81,8 @@ machine_auth:
   - extension:invoke
 account_scope:
   scope_type: project
-  description: Microsoft SQL Server connections are project-scoped and resolved through
-    project config and secrets.
+  description: Microsoft SQL Server connections are project-scoped and resolved through project config
+    and secrets.
 external_effects:
 - operation_id: execute_write
   effect_kind: database_write
@@ -89,8 +112,7 @@ runtime:
     connection_types:
     - connection_type_id: toolbox_sql_writer
       display_name: Microsoft SQL Server
-      description: Project connection for parameterized Microsoft SQL Server workflow
-        writes.
+      description: Project connection for parameterized Microsoft SQL Server workflow writes.
       config_schema:
         type: object
         additionalProperties: false
@@ -170,10 +192,9 @@ runtime:
             type: string
             title: Password
             minLength: 1
-            description: Password is required for mssql, cloud-sql-mssql. Supply password
-              or the matching profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB
-              IAM profiles keep password optional; public config env is not a credential
-              source.
+            description: Password is required for mssql, cloud-sql-mssql. Supply password or the matching
+              profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB IAM profiles keep
+              password optional; public config env is not a credential source.
           env:
             type: object
             title: Profile-specific secret environment
@@ -186,10 +207,9 @@ runtime:
                 type: string
                 minLength: 1
         title: Microsoft SQL Server password
-        description: Password is required for mssql, cloud-sql-mssql. Supply password
-          or the matching profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB
-          IAM profiles keep password optional; public config env is not a credential
-          source.
+        description: Password is required for mssql, cloud-sql-mssql. Supply password or the matching
+          profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB IAM profiles keep password
+          optional; public config env is not a credential source.
         anyOf:
         - required:
           - password
@@ -211,8 +231,7 @@ runtime:
       connector_type_id: toolbox_database
       database_kind: database
       display_name: Microsoft SQL Server
-      description: Read-only schema inspection and saved queries for Microsoft SQL
-        Server.
+      description: Read-only schema inspection and saved queries for Microsoft SQL Server.
       source_kind: database
       source_extension_id: flowsteward.data-connector-mcp-toolbox-mssql
       source_extension_name: Microsoft SQL Server
@@ -248,8 +267,8 @@ runtime:
           database:
             type: string
             title: Database or dataset
-            description: Database, dataset, namespace, or local file value used by
-              this Toolbox source when applicable.
+            description: Database, dataset, namespace, or local file value used by this Toolbox source
+              when applicable.
           host:
             type: string
             title: Host
@@ -335,10 +354,9 @@ runtime:
             type: string
             title: Password
             minLength: 1
-            description: Password is required for mssql, cloud-sql-mssql. Supply password
-              or the matching profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB
-              IAM profiles keep password optional; public config env is not a credential
-              source.
+            description: Password is required for mssql, cloud-sql-mssql. Supply password or the matching
+              profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB IAM profiles keep
+              password optional; public config env is not a credential source.
           env:
             type: object
             title: Profile-specific secret environment
@@ -350,10 +368,9 @@ runtime:
               MSSQL_PASSWORD:
                 type: string
                 minLength: 1
-        description: Password is required for mssql, cloud-sql-mssql. Supply password
-          or the matching profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB
-          IAM profiles keep password optional; public config env is not a credential
-          source.
+        description: Password is required for mssql, cloud-sql-mssql. Supply password or the matching
+          profile-specific secret env variable. Managed PostgreSQL/MySQL/AlloyDB IAM profiles keep password
+          optional; public config env is not a credential source.
         anyOf:
         - required:
           - password
@@ -385,12 +402,16 @@ runtime:
       schema_refresh_support: true
     operation_manifest:
     - operation_id: execute_write
-      display_name: Execute Microsoft SQL Server write
+      display_name: 'SQL: Insert, update or delete rows'
       workflow_visible: true
       operation_kind: action
       category: database
-      description: Execute one parameterized INSERT, UPDATE or DELETE using the selected
-        project connection. INSERT supports database-specific upsert syntax.
+      description: 'Write workflow results to Microsoft SQL Server using one parameterized INSERT, UPDATE
+        or DELETE. Select a Microsoft SQL Server project connection with write permission. Example: save
+        a processing result with INSERT INTO workflow_results (record_id, status) VALUES (:record_id,
+        :status), then provide Parameters and a type for each named parameter. Use Dataset saved queries
+        for read-only SELECTs. Test mode validates this action without writing; SQL syntax must be supported
+        by the selected database.'
       connection_type_ids:
       - toolbox_sql_writer
       required_scopes:
@@ -399,15 +420,30 @@ runtime:
       - name: connection_ref
         value_type: connection_ref
         required: true
+        display_name: Microsoft SQL Server project connection
+        description: Select an existing project connection for Microsoft SQL Server, configured with the
+          correct profile and credentials in connection secrets. Its database user needs permission to
+          execute your statement.
       - name: sql
         value_type: text
         required: true
+        display_name: SQL write statement
+        description: Enter one INSERT, UPDATE or DELETE supported by the selected database. Bind values
+          with :named placeholders, provide Parameters and declare every placeholder type. Use a Dataset
+          saved query for SELECT reads.
       - name: params
         value_type: object
         required: false
+        display_name: Parameters (JSON)
+        description: 'Object containing a value for every :named SQL placeholder. Bind workflow values
+          here rather than inserting them into SQL text. Example: {"record_id":1042,"status":"approved"}.'
       - name: param_schema
         value_type: object
         required: false
+        display_name: Parameter types (JSON Schema)
+        description: 'Declare a type for every :named SQL placeholder in properties, matching the Parameters
+          object. Required when SQL uses parameters; omit only for SQL without placeholders. Supported
+          types: string, integer, number, boolean and null.'
       outputs:
       - name: status
         value_type: text
@@ -425,8 +461,8 @@ runtime:
     - operation_id: test_connection
       workflow_visible: false
       operation_kind: action
-      description: Validate that the Microsoft SQL Server driver can list tables for
-        the configured Microsoft SQL Server connection.
+      description: Validate that the Microsoft SQL Server driver can list tables for the configured Microsoft
+        SQL Server connection.
       required_scopes:
       - extension:invoke
       result_fields:
@@ -442,8 +478,8 @@ runtime:
     - operation_id: introspect_schema
       workflow_visible: false
       operation_kind: action
-      description: Return a normalized typed schema snapshot from the Microsoft SQL
-        Server driver list_tables output.
+      description: Return a normalized typed schema snapshot from the Microsoft SQL Server driver list_tables
+        output.
       required_scopes:
       - extension:invoke
       result_fields:
@@ -461,8 +497,7 @@ runtime:
     - operation_id: validate_query
       workflow_visible: false
       operation_kind: action
-      description: Validate a saved read-only query template against dataset resource
-        scope.
+      description: Validate a saved read-only query template against dataset resource scope.
       required_scopes:
       - extension:invoke
       result_fields:
@@ -490,8 +525,7 @@ runtime:
     - operation_id: execute_template
       workflow_visible: false
       operation_kind: action
-      description: Execute a saved read-only query template with named parameters
-        and runtime row limits.
+      description: Execute a saved read-only query template with named parameters and runtime row limits.
       required_scopes:
       - extension:invoke
       result_fields:
@@ -506,8 +540,7 @@ runtime:
     - operation_id: infer_output_schema
       workflow_visible: false
       operation_kind: action
-      description: Infer output schema from a bounded read-only preview of the query
-        template.
+      description: Infer output schema from a bounded read-only preview of the query template.
       required_scopes:
       - extension:invoke
       result_fields:
@@ -542,3 +575,4 @@ runtime:
       error_codes:
       - unknown_query
       - connector_runtime_failed
+    step_ui_manifest: contracts/step_ui_manifest.yaml
