@@ -11,7 +11,7 @@ def test_standalone_database_contract():
     manifest = yaml.safe_load((ROOT / "extension.yaml").read_text())
     variant = json.loads((ROOT / "variant.json").read_text())
     profiles = set(variant["prebuilts"])
-    assert manifest["version"] == "1.3.10"
+    assert manifest["version"] == "1.3.11"
     assert manifest["display_name"] == variant["display_name"]
     contract = manifest["runtime"]["extension_contract_v2"]
     assert len(contract["dataset_connectors"]) == 1
@@ -31,6 +31,4 @@ def test_standalone_database_contract():
     assert not (ROOT / "connector").exists()
     assert not (ROOT / "scripts/render_variant.py").exists()
     profiles_in_build = (ROOT / "scripts/toolbox-prebuilts.txt").read_text().split()
-    assert set(profiles_in_build) == {
-        "mysql" if p == "mariadb" else p for p in profiles
-    }
+    assert set(profiles_in_build) == {"mysql" if p == "mariadb" else p for p in profiles}
