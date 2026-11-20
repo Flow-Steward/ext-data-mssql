@@ -34,9 +34,12 @@ setup and supported profiles are described in the repository README.
    ```
 
 Use the same fields for a single UPDATE or DELETE. Named values remain separate
-from SQL and are bound by the database driver. Do not use multi-statement scripts,
-DDL or transaction-control commands. The connector does not translate statements
-between SQL dialects; the server must support the supplied syntax.
+from SQL and are bound by the database driver. The connector accepts a single
+SQL Server INSERT, UPDATE or DELETE with one- or two-part table names. INSERT
+supports VALUES, DEFAULT VALUES and a flat SELECT. OUTPUT may return values to
+the workflow. Use AS for source aliases in INSERT SELECT. SQL Server resolves
+database-owned views and synonyms with the connection's permissions. Scripts,
+nested queries, OUTPUT INTO and direct external rowset calls are outside this subset.
 
 Parameter types are required whenever placeholders are used; supported scalar
 types are string, integer, number, boolean and null. Omit Parameters and the type

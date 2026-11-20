@@ -11,6 +11,7 @@ import sys
 import time
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -93,6 +94,39 @@ def _runtime_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("padding", [0, 1])
+def test_mssql_entrypoint_bounds_input_before_dispatch(monkeypatch, capsys, padding) -> None:
+    module = _runtime_module()
+    body = b'{"mode":"query"}' + b" " * padding
+    reads: list[int] = []
+    calls: list[dict] = []
+
+    def read(size: int) -> bytes:
+        reads.append(size)
+        return body[:size]
+
+    def dispatch(request: dict) -> dict:
+        calls.append(request)
+        return module._envelope(ok=True)
+
+    monkeypatch.setattr(module, "_MAX_REQUEST_BYTES", len(body) - padding)
+    monkeypatch.setattr(module.sys, "stdin", SimpleNamespace(buffer=SimpleNamespace(read=read)))
+    monkeypatch.setattr(module, "handle_request", dispatch)
+
+    result = module.main()
+
+    assert reads == [len(body) - padding + 1]
+    response = json.loads(capsys.readouterr().out)
+    if padding:
+        assert result == 2
+        assert response["errors"][0]["code"] == "request_too_large"
+        assert not calls
+    else:
+        assert result == 0
+        assert response["ok"]
+        assert calls == [{"mode": "query"}]
 
 
 def test_parameter_binders_cover_every_advertised_connector() -> None:
@@ -513,6 +547,17 @@ def test_mssql_rewrites_schema_qualified_columns_for_a_restricted_source() -> No
         "SELECT [products].sku FROM (SELECT [sku] FROM [warehouse].[products]) "
         "AS [products] WHERE [products].sku IS NOT NULL"
     )
+
+
+def test_mssql_scope_requires_the_complete_predicate() -> None:
+    module = _runtime_module()
+    sql = "SELECT sku FROM warehouse.products WHERE (sku = :sku) AND stock BETWEEN 0 AND 5"
+    allowed = {("warehouse", "products"): None}
+
+    authorized, _resources = module._validate_query_scope(sql, allowed)
+    assert "[warehouse].[products]" in authorized
+    with pytest.raises(ValueError, match="SQL Server statement"):
+        module._validate_query_scope(sql + " unrecognized", allowed)
 
 
 def test_dataset_scope_rejects_comma_joined_resource_outside_scope() -> None:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.13
+
+- Limit extension requests to 2 MiB before UTF-8 decoding or JSON parsing.
+- Require complete SQL Server read expressions and a single supported write statement.
+- Accept only one- and two-part writer table names and reject direct references to external data providers.
+
 ## 1.3.12
 
 - Bind SQL Server Dataset reads to their selected schemas and authorize base columns separately from query aliases.

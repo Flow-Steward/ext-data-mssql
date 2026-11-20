@@ -8,6 +8,38 @@ import pytest
 
 import sql_writes
 
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO [inventory].[products] (sku) OUTPUT INSERTED.sku VALUES (:value)",
+        "INSERT INTO inventory.products (sku) SELECT p.sku FROM inventory.preview AS p WHERE p.sku = :value",
+        "UPDATE inventory.products SET stock = stock + :value OUTPUT INSERTED.stock",
+        "UPDATE inventory.products SET label_bytes = 0x4142 WHERE sku = :value",
+        "DELETE FROM inventory.products WHERE sku = :value",
+        "UPDATE products -- visible label\rSET display_name = :value",
+    ],
+)
+def test_mssql_write_keeps_single_local_dml_and_value_spans(sql):
+    statement, placeholders = sql_writes.write_statement(sql, prebuilt="mssql")
+
+    assert statement == sql
+    position = sql.index(":value")
+    assert placeholders == [(position, position + len(":value"), "value")]
+
+
+def test_mssql_write_requires_local_relations_and_complete_predicates():
+    sql = "UPDATE inventory.products SET stock = :stock WHERE sku = :sku"
+
+    with pytest.raises(ValueError, match="SQL Server statement"):
+        sql_writes.write_statement(sql + " unrecognized", prebuilt="mssql")
+    with pytest.raises(ValueError, match="local SQL Server table"):
+        sql_writes.write_statement(
+            "INSERT INTO staging.inventory.products DEFAULT VALUES",
+            prebuilt="mssql",
+        )
+
+
 PAYLOADS = [
     "UPDATE products SET x$$=1; DELETE FROM products; UPDATE products SET x$$=2 WHERE sku='a'",
     "UPDATE products SET x$tag$=1; DROP TABLE products; UPDATE products SET x$tag$=2 WHERE sku='a'",

@@ -6,6 +6,8 @@ from collections.abc import Collection
 import re
 from typing import Any
 
+from sql_server_writes import validate_write
+
 WRITE_PREBUILTS = frozenset(["mssql", "cloud-sql-mssql"])
 _INPUT_FIELDS = frozenset({"connection_ref", "sql", "params", "param_schema"})
 _FORBIDDEN_WORDS = frozenset(
@@ -205,6 +207,8 @@ def write_statement(value: Any, *, prebuilt: str) -> tuple[str, list[tuple[int, 
             "Write SQL cannot contain dollar-quote syntax (raw dollar characters); use bound parameters"
         )
     sql = value.strip()
+    if prebuilt in WRITE_PREBUILTS:
+        return sql, validate_write(sql)
     tokens, placeholders = _write_tokens(
         sql,
         mysql=prebuilt in {"mysql", "mariadb", "cloud-sql-mysql"},

@@ -21,8 +21,8 @@ from typing import Any
 
 from flowsteward_extension_sdk import runtime_context_from_payload
 
+from sql_expression import CAST_TYPES
 from sql_scope import (
-    CAST_TYPES,
     Grant,
     Relation,
     authorize,
@@ -38,6 +38,7 @@ _MESSAGE_ONLY_READ_ONLY_SELECT_STATEMENTS_ARE_ALLOWED = (
 
 EXTENSION_ID = "flowsteward.data-connector-mcp-toolbox-mssql"
 _TOOLBOX_COMMAND_OVERRIDE: list[str] | None = None
+_MAX_REQUEST_BYTES = 2 * 1024 * 1024
 _MAX_MCP_OUTPUT_BYTES = 1024 * 1024
 TOOLBOX_SOURCE_CATALOG = {
     "cloud-sql-mssql": {"display_name": "Cloud SQL for SQL Server", "query_language": "sql"},
@@ -1371,13 +1372,22 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
-    raw = sys.stdin.read().strip()
-    try:
-        request = json.loads(raw) if raw else {}
-    except json.JSONDecodeError as exc:
+    raw = sys.stdin.buffer.read(_MAX_REQUEST_BYTES + 1)
+    if len(raw) > _MAX_REQUEST_BYTES:
         response = _envelope(
             ok=False,
-            errors=[_error("invalid_json", f"Malformed JSON input: {exc.msg}")],
+            errors=[_error("request_too_large", f"Input exceeds {_MAX_REQUEST_BYTES} bytes")],
+        )
+        print(json.dumps(response, sort_keys=True))
+        return 2
+    try:
+        decoded = raw.decode("utf-8").strip()
+        request = json.loads(decoded) if decoded else {}
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        reason = exc.msg if isinstance(exc, json.JSONDecodeError) else "request must be UTF-8"
+        response = _envelope(
+            ok=False,
+            errors=[_error("invalid_json", f"Malformed JSON input: {reason}")],
         )
         print(json.dumps(response, sort_keys=True))
         return 2

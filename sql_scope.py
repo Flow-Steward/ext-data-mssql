@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
+from sql_expression import ExpressionParser
+
 Relation = tuple[str, str]
 Grant = set[str] | None
 
@@ -18,28 +20,12 @@ _TOKEN = re.compile(
     rf"|(?P<string>[Nn]?'(?:[^']|'')*')"
     rf'|(?P<quoted>\[(?:[^\]]|\]\])*\]|"(?:[^"]|"")*")'
     rf"|(?P<parameter>:[A-Za-z_][A-Za-z0-9_]*)"
+    rf"|(?P<binary>0[xX][0-9A-Fa-f]*\b)"
     rf"|(?P<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?)"
     rf"|(?P<word>{_WORD})"
     rf"|(?P<punctuation>[.,()+*/%<>=!&|^~;-])"
 )
 _NAME_KINDS = {"word", "quoted"}
-_EXPRESSION_WORDS = {
-    "and",
-    "or",
-    "not",
-    "in",
-    "is",
-    "null",
-    "like",
-    "between",
-    "escape",
-    "case",
-    "when",
-    "then",
-    "else",
-    "end",
-    "current_timestamp",
-}
 _CLAUSE_WORDS = {"where", "group", "having", "order"}
 _JOIN_WORDS = {"join", "inner", "left", "right", "full", "cross"}
 _SOURCE_BOUNDARIES = _CLAUSE_WORDS | _JOIN_WORDS | {"on", "outer"}
@@ -61,31 +47,6 @@ _OTHER_CLAUSES = {
     "unpivot",
     "with",
     "intersect",
-}
-CAST_TYPES = {
-    "bigint",
-    "binary",
-    "bit",
-    "char",
-    "date",
-    "datetime",
-    "datetime2",
-    "datetimeoffset",
-    "decimal",
-    "float",
-    "int",
-    "money",
-    "nchar",
-    "numeric",
-    "nvarchar",
-    "real",
-    "smallint",
-    "smallmoney",
-    "time",
-    "tinyint",
-    "uniqueidentifier",
-    "varbinary",
-    "varchar",
 }
 
 
@@ -315,71 +276,11 @@ class SelectScope:
                     )
 
     def _expression(self, tokens: list[Token]) -> None:
-        if not tokens:
-            raise ValueError(_UNSUPPORTED)
-        index = 0
-        while index < len(tokens):
-            token = tokens[index]
-            index += 1
-            keyword = token.keyword
-            if (
-                token.kind in {"number", "string", "parameter"}
-                or keyword in _EXPRESSION_WORDS
-                or token.kind == "punctuation"
-                and token.text in "(),+-*/%<>=!&|^~"
-            ):
-                continue
-            if (
-                token.kind not in _NAME_KINDS
-                or keyword in _OTHER_CLAUSES | _CLAUSE_WORDS | _JOIN_WORDS | {"as", "on"}
-            ):
-                raise ValueError(_UNSUPPORTED)
-            if index < len(tokens) and tokens[index].text == "(":
-                if keyword not in self.functions:
-                    raise ValueError(_UNSUPPORTED)
-                if keyword == "cast":
-                    index = self._cast(tokens, index)
-                elif keyword == "count" and [t.text for t in tokens[index : index + 3]] == [
-                    "(",
-                    "*",
-                    ")",
-                ]:
-                    index += 3
-                elif index + 1 < len(tokens) and tokens[index + 1].keyword in {"all", "distinct"}:
-                    index += 2
-                continue
-            name_start = index - 1
-            names, index = _name_parts(tokens, name_start)
-            if index < len(tokens) and tokens[index].text == "(":
-                raise ValueError(_UNSUPPORTED)
-            self._column(names, tokens[name_start:index])
-
-    def _cast(self, tokens: list[Token], start: int) -> int:
-        depth = 0
-        separator = None
-        for index in range(start + 1, len(tokens)):
-            token = tokens[index]
-            if token.text == ")" and not depth:
-                if separator is None:
-                    break
-                type_tokens = tokens[separator + 1 : index]
-                if (
-                    not type_tokens
-                    or type_tokens[0].keyword not in CAST_TYPES
-                    or not re.fullmatch(
-                        r"(?:\((?:[0-9]+(?:,[0-9]+)?|max)\))?",
-                        "".join(item.text.lower() for item in type_tokens[1:]),
-                    )
-                ):
-                    break
-                self._expression(tokens[start + 1 : separator])
-                return index + 1
-            if token.keyword == "as" and not depth:
-                if separator is not None:
-                    break
-                separator = index
-            depth += (token.text == "(") - (token.text == ")")
-        raise ValueError(_UNSUPPORTED)
+        parser = ExpressionParser(tokens, self.functions)
+        parser.expression()
+        parser.finish()
+        for names, name_tokens in parser.columns:
+            self._column(names, name_tokens)
 
     def _projection(self, tokens: list[Token]) -> set[str]:
         aliases = set()
