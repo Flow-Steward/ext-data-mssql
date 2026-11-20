@@ -12,7 +12,11 @@ Supports profiles: `mssql`, `cloud-sql-mssql`. Read-only datasets support schema
 
 Direct SQL Server connections use host, port, database and user, with password in project secrets. Cloud SQL for SQL Server uses Google project, region, instance and IP-type settings and requires database user/password credentials. The runtime also needs the appropriate Google Cloud access for the managed connection. The pinned definitions under `scripts/upstream-prebuilts/` document exact environment names and defaults.
 
-SQL is a deliberately strict subset: raw backslashes and dollar characters are rejected before parsing; pass those characters through bound parameter values. Reads return at most 100 rows and 480 KiB. Writes have no automatic retry; an uncertain result is reported as unknown. Test mode suppresses writes before driver invocation.
+SQL is a deliberately strict subset. Pass backslashes and dollar characters through bound values. Dataset reads support single-level SELECT statements with WHERE, joins, grouping, and ordering. Use AS for output aliases. Window expressions, subqueries, and cross-database names are outside this subset.
+
+Configure an explicit database and use exact names from schema inspection. Qualify columns when joining tables with column grants. An unqualified table is resolved only when one selected relation has that name. The connector sends its schema to SQL Server and exposes only the permitted columns from restricted sources. The host's dotted resource IDs cannot represent embedded periods reliably, so inspection omits those schema and table names.
+
+Datasets saved before catalog information was recorded require a one-time schema refresh and table reselection. Repeat those steps after changing the database or if the saved snapshot cannot identify the selected table and columns unambiguously. Existing queries can keep an ordinary short table reference when exactly one selected table has that name. Reads return at most 100 rows and 480 KiB. Writes have no automatic retry. An uncertain write result is reported as unknown. Test mode suppresses writes before driver invocation.
 
 The bundled AMD64 and ARM64 native executables are unchanged, checksum-verified minimal builds from the prior database-specific package. `toolbox-provenance.json`, `SHA256SUMS` and `THIRD_PARTY.yml` retain the pinned upstream source, original binding patch and build image. No other database adapter is installed. The common engine exists only as a pinned build dependency; `scripts/build_toolbox.sh` accepts no database selector and compiles only this package’s profiles.
 
@@ -27,14 +31,14 @@ Pushes to `main` and pull requests run the shared extension build workflow. The 
 After the versioned release commit is on `main`, publish by pushing its version tag:
 
 ```sh
-git tag v1.3.11
-git push origin v1.3.11
+git tag v1.3.12
+git push origin v1.3.12
 ```
 
 The release workflow runs the shared checks, builds the target archives and publishes the GitHub release and checksums. Do not move an existing tag. To rerun a release for an existing tag, dispatch the same workflow:
 
 ```sh
-gh workflow run release.yml --repo Flow-Steward/ext-data-mssql --ref main -f tag=v1.3.11
+gh workflow run release.yml --repo Flow-Steward/ext-data-mssql --ref main -f tag=v1.3.12
 ```
 
 The manifest, descriptor (when present), package version and tag must identify the same release. Release publication uses the workflow token; no additional repository secret is required by these callers.

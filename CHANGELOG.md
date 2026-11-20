@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.12
+
+- Bind SQL Server Dataset reads to their selected schemas and authorize base columns separately from query aliases.
+- Qualify unambiguous table references from the stored snapshot. Refresh and reselect tables once for Datasets saved before catalog information was recorded.
+
 ## 1.3.11
 
 - Rebuild Linux AMD64 and ARM64 native payloads with grpc-gateway v2.34.0 and its required YAML v4 and Go tooling module updates.

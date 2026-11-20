@@ -14,6 +14,7 @@ def _list_tables() -> list[dict]:
     return [
         {
             "object_details": {
+                "schema_name": "dbo",
                 "object_name": "customers",
                 "object_type": "table",
                 "columns": [
@@ -36,6 +37,7 @@ def _list_tables() -> list[dict]:
         },
         {
             "object_details": {
+                "schema_name": "dbo",
                 "object_name": "orders",
                 "object_type": "table",
                 "columns": [

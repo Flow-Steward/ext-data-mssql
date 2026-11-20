@@ -24,6 +24,7 @@ def load_module(path: Path, name: str) -> ModuleType:
 
 
 def main() -> int:
+    sys.path.insert(0, str(ROOT))
     module: Any = load_module(ROOT / "main.py", "toolbox_dataset_connector_main")
     module._TOOLBOX_COMMAND_OVERRIDE = [sys.executable, str(FAKE_TOOLBOX)]
     connection = {
@@ -59,7 +60,7 @@ def main() -> int:
         raise AssertionError(payload)
     snapshot = payload["result"]["schema_snapshot"]
     resources = sorted(row["resource_id"] for row in snapshot["resources"])
-    if not {"customers", "orders"}.issubset(resources):
+    if not {"dbo.customers", "dbo.orders"}.issubset(resources):
         raise AssertionError(resources)
     print(json.dumps({"ok": True, "resources": resources}, sort_keys=True))
     return 0

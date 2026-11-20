@@ -21,13 +21,19 @@ from typing import Any
 
 from flowsteward_extension_sdk import runtime_context_from_payload
 
+from sql_scope import (
+    CAST_TYPES,
+    Grant,
+    Relation,
+    authorize,
+    resource_id,
+    sql_tokens,
+    strip_comments,
+)
 from sql_writes import write_input, write_statement
 
 _MESSAGE_ONLY_READ_ONLY_SELECT_STATEMENTS_ARE_ALLOWED = (
     "Only read-only SELECT statements are allowed"
-)
-_MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES = (
-    "Could not confidently identify referenced resources"
 )
 
 EXTENSION_ID = "flowsteward.data-connector-mcp-toolbox-mssql"
@@ -307,7 +313,12 @@ def _invoke_toolbox(
 ) -> Any:
     _validate_connection_credentials(config, secret_refs)
     prebuilt = _runtime_prebuilt(config)
-    command = [*_toolbox_command(config), f"--prebuilt={prebuilt}", "--stdio", "--disable-version-check"]
+    command = [
+        *_toolbox_command(config),
+        f"--prebuilt={prebuilt}",
+        "--stdio",
+        "--disable-version-check",
+    ]
     process = subprocess.Popen(  # nosemgrep: fixed packaged argv, never shell=True. # nosec B603
         command,
         stdin=subprocess.PIPE,
@@ -511,19 +522,25 @@ def _column_type(raw_type: str) -> str:
     return "string"
 
 
-def _normalize_toolbox_resource(row: dict[str, Any]) -> dict[str, Any]:
+def _normalize_toolbox_resource(row: dict[str, Any], catalog: str) -> dict[str, Any]:
     details = _json_object(row.get("object_details")) or row
     resource_name = str(
         details.get("object_name") or details.get("table_name") or details.get("name") or ""
-    ).strip()
+    )
+    schema = details.get("schema_name") or row.get("schema_name")
+    if not isinstance(schema, str) or not all(
+        name and name == name.strip() and not any(char in name for char in ".\\$\x00")
+        for name in (schema, resource_name)
+    ):
+        return {}
     resource_type = str(details.get("object_type") or details.get("type") or "table").strip()
     columns: list[dict[str, Any]] = []
     primary_key_columns: list[str] = []
     for index, column in enumerate(_as_list(details.get("columns"))):
         if not isinstance(column, dict):
             continue
-        name = str(column.get("column_name") or column.get("name") or "").strip()
-        if not name:
+        name = str(column.get("column_name") or column.get("name") or "")
+        if not name or name != name.strip():
             continue
         source_type = str(column.get("data_type") or column.get("source_type") or "").strip()
         primary_key = bool(column.get("is_primary_key") or column.get("primary_key"))
@@ -562,7 +579,7 @@ def _normalize_toolbox_resource(row: dict[str, Any]) -> dict[str, Any]:
     if isinstance(details.get("constraints"), list):
         constraints["raw"] = details["constraints"]
     return {
-        "resource_id": resource_name,
+        "resource_id": resource_id((schema, resource_name)),
         "name": resource_name,
         "resource_type": resource_type,
         "selectable": True,
@@ -570,7 +587,8 @@ def _normalize_toolbox_resource(row: dict[str, Any]) -> dict[str, Any]:
         "indexes": indexes,
         "constraints": constraints,
         "metadata": {
-            "toolbox_schema_name": details.get("schema_name"),
+            "toolbox_catalog_name": catalog,
+            "toolbox_schema_name": schema,
             "toolbox_object_type": details.get("object_type"),
         },
     }
@@ -579,6 +597,7 @@ def _normalize_toolbox_resource(row: dict[str, Any]) -> dict[str, Any]:
 def _introspect(request: dict[str, Any]) -> dict[str, Any]:
     config = _connection_config(request)
     prebuilt = _prebuilt(config)
+    catalog = _dataset_catalog(request)
     tables = _invoke_toolbox(
         config,
         _secret_refs(request),
@@ -589,7 +608,7 @@ def _introspect(request: dict[str, Any]) -> dict[str, Any]:
         resource
         for row in _toolbox_rows(tables)
         if isinstance(row, dict)
-        and (resource := _normalize_toolbox_resource(row)).get("resource_id")
+        and (resource := _normalize_toolbox_resource(row, catalog)).get("resource_id")
     ]
     return {
         "schema_version": "dataset_schema_snapshot.v1",
@@ -625,47 +644,79 @@ def _param_schema(request: dict[str, Any]) -> dict[str, Any]:
     return _as_dict(template.get("param_schema_jsonb") or template.get("param_schema"))
 
 
-def _dataset_scope(request: dict[str, Any]) -> dict[str, set[str] | None]:
+def _dataset_catalog(request: dict[str, Any]) -> str:
+    config = _connection_config(request)
+    profile = _runtime_prebuilt(config)
+    env_name = next(
+        key for key, field in TOOLBOX_ENV_FIELDS[profile].items() if field == "database"
+    )
+    catalog = _toolbox_env(config, _secret_refs(request)).get(env_name, "")
+    if not catalog.strip():
+        raise ValueError("Configure an explicit SQL Server database for Dataset operations")
+    return catalog
+
+
+def _dataset_scope(request: dict[str, Any]) -> dict[Relation, Grant]:
     dataset = _as_dict(_action_input(request).get("dataset"))
     scope = _as_dict(dataset.get("resource_scope_jsonb") or dataset.get("resource_scope"))
-    raw_resources = scope.get("resources")
-    resources = raw_resources if isinstance(raw_resources, list) else []
-    allowed: dict[str, set[str] | None] = {}
-    short_name_map: dict[str, list[tuple[str, set[str] | None]]] = {}
-    for resource in resources:
+    snapshots: dict[str, list[dict[str, Any]]] = {}
+    for row in _as_list(_as_dict(dataset.get("schema_snapshot_jsonb")).get("resources")):
+        if isinstance(row, dict) and isinstance(row.get("resource_id"), str):
+            snapshots.setdefault(row["resource_id"], []).append(row)
+    catalog = _dataset_catalog(request)
+    allowed: dict[Relation, Grant] = {}
+    for resource in _as_list(scope.get("resources")):
         if not isinstance(resource, dict):
-            continue
-        resource_id = str(resource.get("resource_id") or "").strip().lower()
-        if not resource_id:
-            continue
+            raise ValueError("Invalid Dataset resource grant")
+        selected = resource.get("resource_id")
+        if not isinstance(selected, str) or not selected:
+            raise ValueError("Invalid Dataset resource grant")
+        matches = snapshots.get(selected, [])
+        if len(matches) != 1:
+            raise ValueError(
+                "Refresh schema inspection and reselect Dataset resources to verify their SQL Server database and schema"
+            )
+        row = matches[0]
+        metadata = _as_dict(row.get("metadata"))
+        schema = metadata.get("toolbox_schema_name")
+        introspected_catalog = metadata.get("toolbox_catalog_name")
+        name = row.get("name", selected)
+        if (
+            not isinstance(schema, str)
+            or not schema
+            or not isinstance(name, str)
+            or not name
+            or introspected_catalog != catalog
+        ):
+            raise ValueError(
+                "Refresh schema inspection and reselect Dataset resources to verify their SQL Server database and schema"
+            )
+        relation = (schema, name)
+        if selected not in {resource_id(relation), name}:
+            raise ValueError("Invalid Dataset resource grant")
+        if relation in allowed:
+            raise ValueError("Duplicate Dataset resource grant")
         columns = resource.get("columns")
-        allowed_columns = (
-            None
-            if columns is None
-            else {str(column or "").strip() for column in columns if str(column or "").strip()}
-        )
-        allowed[resource_id] = allowed_columns
-        short_name_map.setdefault(_resource_key(resource_id), []).append(
-            (resource_id, allowed_columns)
-        )
-    for short_name, matches in short_name_map.items():
-        if short_name in allowed or len(matches) != 1:
-            continue
-        allowed[short_name] = matches[0][1]
+        if columns is not None and (
+            not isinstance(columns, list)
+            or not all(isinstance(column, str) and column for column in columns)
+        ):
+            raise ValueError("Invalid Dataset column grant")
+        if columns is not None:
+            snapshot_columns: dict[str, list[str]] = {}
+            for column in _as_list(row.get("columns")):
+                column_name = _as_dict(column).get("name")
+                if isinstance(column_name, str):
+                    snapshot_columns.setdefault(column_name.strip(), []).append(column_name)
+            if any(snapshot_columns.get(column) != [column] for column in columns):
+                raise ValueError(
+                    "Refresh schema inspection and reselect unambiguous Dataset columns"
+                )
+        allowed[relation] = None if columns is None else set(columns)
     return allowed
 
 
-_PARAM_REFS = re.compile(r":([A-Za-z_](?a:\w*))")
 _PARAMETER_BINDERS = {"cloud-sql-mssql": "named-positional", "mssql": "named-positional"}
-# Strips single/double-quoted string literals so their contents are never
-# mistaken for column identifiers during scope analysis.
-_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'", re.DOTALL)
-# Matches an (optionally dotted/quoted) identifier reference. Quoted identifiers
-# ("col", `col`, [col]) are normalized to their inner name by _bare_identifier.
-_IDENTIFIER_REF = re.compile(
-    r'(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_]\w*)'
-    r'(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_]\w*|\*))*'
-)
 _READ_ONLY_FORBIDDEN_TOKENS = frozenset(
     {
         "alter",
@@ -701,23 +752,6 @@ _READ_ONLY_FORBIDDEN_TOKENS = frozenset(
         "vacuum",
     }
 )
-_SOURCE_CLAUSE_TERMINATORS = frozenset(
-    {
-        "where",
-        "group",
-        "having",
-        "order",
-        "limit",
-        "offset",
-        "fetch",
-        "union",
-        "intersect",
-        "except",
-        "window",
-        "qualify",
-        "on",
-    }
-)
 _READ_ONLY_FUNCTIONS = frozenset(
     {
         "abs",
@@ -751,130 +785,15 @@ _READ_ONLY_FUNCTIONS = frozenset(
 
 
 def _sql_tokens(sql: str) -> list[tuple[str, str]]:
-    if "\\" in sql or "$" in sql:
-        raise ValueError(
-            "Read SQL cannot contain backslashes or dollar-quote syntax (raw dollar characters); use bound parameters"
-        )
-    """Tokenize SQL code while deliberately excluding literal/comment contents."""
-    tokens: list[tuple[str, str]] = []
-    index = 0
-    length = len(sql)
-    while index < length:
-        char = sql[index]
-        following = sql[index + 1] if index + 1 < length else ""
-        if char.isspace():
-            index += 1
-            continue
-        if char == "-" and following == "-":
-            end = sql.find("\n", index + 2)
-            index = length if end < 0 else end + 1
-            continue
-        if char == "#":
-            end = sql.find("\n", index + 1)
-            index = length if end < 0 else end + 1
-            continue
-        if char == "/" and following == "*":
-            end = sql.find("*/", index + 2)
-            if end < 0:
-                raise ValueError("Unterminated SQL block comment")
-            index = end + 2
-            continue
-        if char == "'":
-            index += 1
-            while index < length:
-                if sql[index] == "'":
-                    if index + 1 < length and sql[index + 1] == "'":
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                index += 2 if sql[index] == "\\" and index + 1 < length else 1
-            else:
-                raise ValueError("Unterminated SQL string literal")
-            continue
-        if char == "$":
-            tag_match = re.match(r"\$[A-Za-z_](?a:\w)*\$|\$\$", sql[index:])
-            if tag_match:
-                delimiter = tag_match.group(0)
-                end = sql.find(delimiter, index + len(delimiter))
-                if end < 0:
-                    raise ValueError("Unterminated SQL dollar-quoted literal")
-                index = end + len(delimiter)
-                continue
-        if char in {'"', "`", "["}:
-            close = "]" if char == "[" else char
-            end = sql.find(close, index + 1)
-            if end < 0:
-                raise ValueError("Unterminated quoted SQL identifier")
-            tokens.append(("identifier", sql[index + 1 : end].replace(close + close, close)))
-            index = end + 1
-            continue
-        if char.isascii() and (char.isalpha() or char == "_"):
-            end = index + 1
-            while end < length and sql[end].isascii() and (sql[end].isalnum() or sql[end] == "_"):
-                end += 1
-            tokens.append(("identifier", sql[index:end]))
-            index = end
-            continue
-        if char.isdigit():
-            end = index + 1
-            while end < length and (sql[end].isdigit() or sql[end] == "."):
-                end += 1
-            tokens.append(("number", sql[index:end]))
-            index = end
-            continue
-        tokens.append(("punctuation", char))
-        index += 1
-    return tokens
+    return [
+        ("identifier" if token.kind == "word" else token.kind, token.name)
+        for token in sql_tokens(sql)
+        if token.kind != "comment"
+    ]
 
 
 def _strip_sql_comments(sql: str) -> str:
-    if "\\" in sql or "$" in sql:
-        raise ValueError(
-            "Read SQL cannot contain backslashes or dollar-quote syntax (raw dollar characters); use bound parameters"
-        )
-    """Remove comments without touching SQL literals, so an appended cap stays executable."""
-    result: list[str] = []
-    index = 0
-    length = len(sql)
-    while index < length:
-        char = sql[index]
-        following = sql[index + 1] if index + 1 < length else ""
-        if char == "-" and following == "-":
-            end = sql.find("\n", index + 2)
-            index = length if end < 0 else end
-            continue
-        if char == "#":
-            end = sql.find("\n", index + 1)
-            index = length if end < 0 else end
-            continue
-        if char == "/" and following == "*":
-            end = sql.find("*/", index + 2)
-            if end < 0:
-                raise ValueError("Unterminated SQL block comment")
-            index = end + 2
-            continue
-        result.append(char)
-        if char == "'":
-            index += 1
-            while index < length:
-                quoted = sql[index]
-                result.append(quoted)
-                if quoted == "\\" and index + 1 < length:
-                    result.append(sql[index + 1])
-                    index += 2
-                    continue
-                if quoted == "'":
-                    if index + 1 < length and sql[index + 1] == "'":
-                        result.append(sql[index + 1])
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                index += 1
-            continue
-        index += 1
-    return "".join(result)
+    return strip_comments(sql)
 
 
 # SQL keywords/operators that may appear bare in expressions and must never be
@@ -950,12 +869,6 @@ _SQL_NONCOLUMN_TOKENS = frozenset(
 )
 
 
-def _bare_identifier(token: str) -> str:
-    """Return the unquoted final segment of a (possibly dotted/quoted) identifier."""
-    last = token.rsplit(".", 1)[-1].strip()
-    return last.strip('"`[] ')
-
-
 def _template_sql(definition: dict[str, Any], *, require_predicate: bool = True) -> str:
     sql = str(definition.get("sql") or definition.get("sql_template") or "").strip()
     if not sql:
@@ -983,7 +896,7 @@ def _template_sql(definition: dict[str, Any], *, require_predicate: bool = True)
         # A keyword before "(" is syntax, not a call: JOIN ... USING (id), ON (a = b),
         # EXISTS (subquery), IN (...), JOIN (subquery). Only a name that calls something
         # must be a known read-only function.
-        if lowered in _SQL_NONCOLUMN_TOKENS:
+        if lowered in _SQL_NONCOLUMN_TOKENS or lowered in CAST_TYPES:
             continue
         if lowered not in _READ_ONLY_FUNCTIONS:
             raise ValueError(_MESSAGE_ONLY_READ_ONLY_SELECT_STATEMENTS_ARE_ALLOWED)
@@ -992,178 +905,8 @@ def _template_sql(definition: dict[str, Any], *, require_predicate: bool = True)
     return normalized_sql
 
 
-def _resource_key(value: str) -> str:
-    return value.rsplit(".", 1)[-1]
-
-
-def _qualified_identifier(tokens: list[tuple[str, str]], start: int) -> tuple[str, int]:
-    if start >= len(tokens) or tokens[start][0] != "identifier":
-        raise ValueError(_MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES)
-    parts = [tokens[start][1].strip()]
-    index = start + 1
-    while index + 1 < len(tokens) and tokens[index] == ("punctuation", "."):
-        if tokens[index + 1][0] != "identifier":
-            raise ValueError(_MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES)
-        parts.append(tokens[index + 1][1].strip())
-        index += 2
-    return ".".join(parts).lower(), index
-
-
-def _referenced_resources(sql: str) -> set[str]:
-    """Return every top-level table source; reject SQL shapes we cannot scope safely."""
-    tokens = _sql_tokens(sql)
-    resources: set[str] = set()
-    in_source_clause = False
-    expect_source = False
-    index = 0
-    while index < len(tokens):
-        kind, value = tokens[index]
-        lowered = value.lower() if kind == "identifier" else ""
-        if kind == "identifier" and lowered in {"from", "join"}:
-            in_source_clause = True
-            expect_source = True
-            index += 1
-            continue
-        if in_source_clause and kind == "identifier" and lowered in _SOURCE_CLAUSE_TERMINATORS:
-            in_source_clause = False
-            expect_source = False
-            index += 1
-            continue
-        if expect_source:
-            if value == "(":
-                raise ValueError("Subqueries and derived tables are not allowed in dataset queries")
-            resource, index = _qualified_identifier(tokens, index)
-            resources.add(resource)
-            expect_source = False
-            continue
-        if in_source_clause and value == ",":
-            expect_source = True
-        index += 1
-    if expect_source or not resources:
-        raise ValueError(_MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES)
-    return resources
-
-
-def _source_bindings(sql: str) -> tuple[set[str], dict[str, str]]:
-    """Return source resources and their table/alias names without guessing ownership."""
-    tokens = _sql_tokens(sql)
-    resources: set[str] = set()
-    bindings: dict[str, str] = {}
-    in_source_clause = False
-    expect_source = False
-    index = 0
-    while index < len(tokens):
-        kind, value = tokens[index]
-        lowered = value.lower() if kind == "identifier" else ""
-        if kind == "identifier" and lowered in {"from", "join"}:
-            in_source_clause = True
-            expect_source = True
-            index += 1
-            continue
-        if in_source_clause and kind == "identifier" and lowered in _SOURCE_CLAUSE_TERMINATORS:
-            in_source_clause = False
-            expect_source = False
-            index += 1
-            continue
-        if expect_source:
-            if value == "(":
-                raise ValueError("Subqueries and derived tables are not allowed in dataset queries")
-            resource, index = _qualified_identifier(tokens, index)
-            resources.add(resource)
-            for binding in {resource, _resource_key(resource)}:
-                existing = bindings.get(binding)
-                if existing is not None and existing != resource:
-                    raise ValueError(_MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES)
-                bindings[binding] = resource
-            if index < len(tokens) and tokens[index] == ("identifier", "as"):
-                index += 1
-            if index < len(tokens) and tokens[index][0] == "identifier":
-                alias = tokens[index][1].lower()
-                if alias not in _SOURCE_CLAUSE_TERMINATORS and alias not in {
-                    "join",
-                    "inner",
-                    "left",
-                    "right",
-                    "full",
-                    "cross",
-                    "outer",
-                }:
-                    existing = bindings.get(alias)
-                    if existing is not None and existing != resource:
-                        raise ValueError(
-                            _MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES
-                        )
-                    bindings[alias] = resource
-                    index += 1
-            expect_source = False
-            continue
-        if in_source_clause and value == ",":
-            expect_source = True
-        index += 1
-    if expect_source or not resources:
-        raise ValueError(_MESSAGE_COULD_NOT_CONFIDENTLY_IDENTIFY_REFERENCED_RESOURCES)
-    return resources, bindings
-
-
-def _referenced_column_references(sql: str) -> list[tuple[str | None, str]]:
-    """Return (owning resource, column) pairs; ambiguous columns stay unowned."""
-    resources, bindings = _source_bindings(sql)
-    stripped = _STRING_LITERAL.sub(" ", _PARAM_REFS.sub(" ", _strip_sql_comments(sql)))
-    aliases = {name.lower() for name in re.findall(r"\bas\s+([A-Z_]\w*)", stripped, re.IGNORECASE)}
-    references: list[tuple[str | None, str]] = []
-    for match in _IDENTIFIER_REF.finditer(stripped):
-        token = match.group(0)
-        normalized = token.lower().replace(" ", "")
-        if normalized in resources:
-            continue
-        if "." not in token and stripped[match.end() :].lstrip().startswith("("):
-            continue
-        parts = [_bare_identifier(part) for part in token.split(".")]
-        column = parts[-1]
-        lowered = column.lower()
-        if not column or lowered in _SQL_NONCOLUMN_TOKENS:
-            continue
-        if len(parts) > 1:
-            owner = bindings.get(parts[-2].lower())
-            if owner is None:
-                raise ValueError("Could not confidently identify column ownership")
-            references.append((owner, column))
-        elif lowered not in bindings and lowered not in aliases:
-            references.append((None, column))
-    return references
-
-
-def _validate_query_scope(sql: str, allowed: dict[str, set[str] | None]) -> None:
-    if not allowed:
-        raise ValueError("Dataset resource scope is empty")
-    referenced = _referenced_resources(sql)
-    outside = sorted(resource for resource in referenced if resource not in allowed)
-    if outside:
-        raise ValueError(
-            "Query references resources outside dataset scope: "
-            f"{outside}. Allowed resources: {sorted(allowed)}"
-        )
-    if not any(allowed.get(resource) is not None for resource in referenced):
-        return
-    stripped = _STRING_LITERAL.sub(" ", _PARAM_REFS.sub(" ", _strip_sql_comments(sql)))
-    projection = re.split(r"\bfrom\b", stripped, maxsplit=1, flags=re.IGNORECASE)[0]
-    projection = re.sub(r"(?is)^\s*select\s+(?:distinct\s+)?", "", projection)
-    if re.search(r"(?:^|,)\s*\*", projection):
-        raise ValueError("Query references columns outside dataset scope: wildcard selection")
-    outside_columns: list[str] = []
-    for owner, column in _referenced_column_references(sql):
-        resolved_owner = owner
-        if resolved_owner is None:
-            if len(referenced) != 1:
-                raise ValueError("Could not confidently identify column ownership")
-            resolved_owner = next(iter(referenced))
-        permitted = allowed.get(resolved_owner)
-        if permitted is not None and (column == "*" or column not in permitted):
-            outside_columns.append(f"{resolved_owner}.{column}")
-    if outside_columns:
-        raise ValueError(
-            f"Query references columns outside dataset scope: {sorted(set(outside_columns))}"
-        )
+def _validate_query_scope(sql: str, allowed: dict[Relation, Grant]) -> tuple[str, set[Relation]]:
+    return authorize(sql, allowed, _READ_ONLY_FUNCTIONS)
 
 
 def _limited_sql(prebuilt: str, sql: str, limit: int) -> str:
@@ -1178,10 +921,10 @@ def _limited_sql(prebuilt: str, sql: str, limit: int) -> str:
     limit_positions: list[int] = []
     top_positions: list[int] = []
     for index, (kind, value) in enumerate(tokens):
-        if value == "(":
+        if kind == "punctuation" and value == "(":
             depth += 1
             continue
-        if value == ")":
+        if kind == "punctuation" and value == ")":
             depth -= 1
             continue
         if depth == 0 and kind == "identifier" and value.lower() == "limit":
@@ -1198,9 +941,9 @@ def _limited_sql(prebuilt: str, sql: str, limit: int) -> str:
             )
         depth = 0
         for kind, value in tokens:
-            if value == "(":
+            if kind == "punctuation" and value == "(":
                 depth += 1
-            elif value == ")":
+            elif kind == "punctuation" and value == ")":
                 depth -= 1
             elif (
                 depth == 0
@@ -1208,7 +951,7 @@ def _limited_sql(prebuilt: str, sql: str, limit: int) -> str:
                 and value.lower() in {"union", "intersect", "except"}
             ):
                 raise ValueError("SQL Server set queries are not supported by the bounded TOP form")
-        match = re.match(r"(?is)^(\s*select\s+)(distinct\s+)?", normalized)
+        match = re.match(r"(?is)^(\s*select\s+)((?:distinct|all)\s+)?", normalized)
         if not match:
             raise ValueError(_MESSAGE_ONLY_READ_ONLY_SELECT_STATEMENTS_ARE_ALLOWED)
         return f"{match.group(1)}{match.group(2) or ''}TOP ({limit}) {normalized[match.end() :]}"
@@ -1247,73 +990,11 @@ def _limited_sql(prebuilt: str, sql: str, limit: int) -> str:
 
 
 def _placeholder_occurrences(sql: str) -> list[tuple[int, int, str]]:
-    if "\\" in sql or "$" in sql:
-        raise ValueError(
-            "Read SQL cannot contain backslashes or dollar-quote syntax (raw dollar characters); use bound parameters"
-        )
-    occurrences: list[tuple[int, int, str]] = []
-    index = 0
-    length = len(sql)
-    while index < length:
-        char = sql[index]
-        following = sql[index + 1] if index + 1 < length else ""
-        if char == "'":
-            index += 1
-            while index < length:
-                if sql[index] == "'":
-                    if index + 1 < length and sql[index + 1] == "'":
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                index += 2 if sql[index] == "\\" and index + 1 < length else 1
-            continue
-        if char in {'"', "`"}:
-            quote = char
-            index += 1
-            while index < length:
-                if sql[index] == quote:
-                    if index + 1 < length and sql[index + 1] == quote:
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                index += 1
-            continue
-        if char == "[":
-            end = sql.find("]", index + 1)
-            index = length if end < 0 else end + 1
-            continue
-        if char == "-" and following == "-":
-            end = sql.find("\n", index + 2)
-            index = length if end < 0 else end + 1
-            continue
-        if char == "/" and following == "*":
-            end = sql.find("*/", index + 2)
-            index = length if end < 0 else end + 2
-            continue
-        if char == "$":
-            tag_match = re.match(r"\$[A-Za-z_](?a:\w)*\$|\$\$", sql[index:])
-            if tag_match:
-                delimiter = tag_match.group(0)
-                end = sql.find(delimiter, index + len(delimiter))
-                index = length if end < 0 else end + len(delimiter)
-                continue
-        if char == ":":
-            if following == ":":
-                index += 2
-                continue
-            if following and (following.isalpha() or following == "_") and following.isascii():
-                end = index + 2
-                while end < length and (
-                    sql[end].isascii() and (sql[end].isalnum() or sql[end] == "_")
-                ):
-                    end += 1
-                occurrences.append((index, end, sql[index + 1 : end]))
-                index = end
-                continue
-        index += 1
-    return occurrences
+    return [
+        (token.start, token.end, token.text[1:])
+        for token in sql_tokens(sql)
+        if token.kind == "parameter"
+    ]
 
 
 def _placeholder_names(sql: str) -> list[str]:
@@ -1492,7 +1173,7 @@ def _execute_sql(request: dict[str, Any], *, preview: bool) -> dict[str, Any]:
     config = _connection_config(request)
     prebuilt = _prebuilt(config)
     sql = _template_sql(_query_definition(request))
-    _validate_query_scope(sql, _dataset_scope(request))
+    sql, _relations = _validate_query_scope(sql, _dataset_scope(request))
     params = _params(request, sql)
     limit = _limit(
         request,
@@ -1627,7 +1308,7 @@ def handle_action(request: dict[str, Any]) -> dict[str, Any]:
             )
         if action_id == "validate_query":
             sql = _template_sql(_query_definition(request))
-            _validate_query_scope(sql, _dataset_scope(request))
+            sql, relations = _validate_query_scope(sql, _dataset_scope(request))
             _validate_declared_params(request, sql)
             preview = _execute_sql(request, preview=True)
             return _envelope(
@@ -1635,7 +1316,7 @@ def handle_action(request: dict[str, Any]) -> dict[str, Any]:
                 result={
                     "valid": True,
                     "read_only": True,
-                    "referenced_resources": sorted(_referenced_resources(sql)),
+                    "referenced_resources": sorted(resource_id(relation) for relation in relations),
                     "row_count": preview["row_count"],
                     "output_schema": preview["output_schema"],
                 },

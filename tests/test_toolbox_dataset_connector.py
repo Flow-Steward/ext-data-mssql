@@ -138,10 +138,10 @@ def test_parameter_compiler_uses_driver_placeholders_without_rendering_values(
     assert value not in compiled["sql"]
 
 
-def test_parameter_scanner_ignores_literals_identifiers_comments_and_postgres_casts() -> None:
+def test_parameter_scanner_ignores_literals_identifiers_comments_and_casts() -> None:
     module = _runtime_module()
     sql = (
-        "SELECT ':literal', \"quoted:identifier\", value::text FROM events "
+        "SELECT ':literal', \"quoted:identifier\", CAST(value AS nvarchar(20)) FROM events "
         "WHERE event = :event -- :line_comment\n"
         "AND note = 'still :literal' /* :block_comment */ AND parent = :event"
     )
@@ -291,13 +291,237 @@ def test_dynamic_identifier_parameter_is_rejected_before_toolbox(monkeypatch) ->
         module._execute_sql(request, preview=False)
 
 
+def mssql_dataset_request(sql: str, resource: dict, snapshot: list[dict] | None = None) -> dict:
+    if snapshot is None and "." in resource.get("resource_id", ""):
+        schema, name = resource["resource_id"].split(".", 1)
+        snapshot = [
+            {
+                "resource_id": resource["resource_id"],
+                "name": name,
+                "columns": [{"name": column} for column in resource.get("columns") or []],
+                "metadata": {"toolbox_schema_name": schema, "toolbox_catalog_name": "inventory"},
+            }
+        ]
+    return {
+        "contract_version": "extension_host_v2",
+        "runtime_context": dict(ROOT_STEP_SCOPE),
+        "mode": "action",
+        "action": {
+            "action_id": "execute_template",
+            "input": {
+                "connection_config": {
+                    "prebuilt": "mssql",
+                    "host": "db.example",
+                    "database": "inventory",
+                    "user": "reader",
+                },
+                "secret_refs": {"values": {"password": "fixture"}},
+                "dataset": {
+                    "resource_scope_jsonb": {"resources": [resource]},
+                    "schema_snapshot_jsonb": {"resources": snapshot or []},
+                },
+                "query_template": {"query_definition_jsonb": {"sql": sql}},
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("resource_id", "snapshot"),
+    [
+        ("warehouse.products", None),
+        (
+            "products",
+            [
+                {
+                    "resource_id": "products",
+                    "columns": [{"name": "sku"}],
+                    "metadata": {
+                        "toolbox_schema_name": "warehouse",
+                        "toolbox_catalog_name": "inventory",
+                    },
+                }
+            ],
+        ),
+    ],
+)
+def test_mssql_pins_ordinary_saved_reads_to_the_selected_schema(
+    monkeypatch, resource_id, snapshot
+) -> None:
+    module = _runtime_module()
+    queries = []
+    monkeypatch.setattr(
+        module,
+        "_invoke_toolbox",
+        lambda _cfg, _secrets, _tool, params, **_kw: queries.append(params),
+    )
+    request = mssql_dataset_request(
+        "SELECT sku AS item_code FROM products WHERE sku = 'sample' ORDER BY item_code",
+        {"resource_id": resource_id, "columns": ["sku"]},
+        snapshot,
+    )
+
+    result = module.handle_request(request)
+
+    assert result["ok"], result.get("errors")
+    assert "(SELECT [sku] FROM [warehouse].[products]) AS [products]" in queries[0]["sql"]
+    assert queries[0]["sql"].startswith("SELECT TOP (100) sku AS item_code")
+
+
+def test_mssql_introspection_distinguishes_schema_resources(monkeypatch) -> None:
+    module = _runtime_module()
+    monkeypatch.setattr(
+        module,
+        "_invoke_toolbox",
+        lambda *_args, **_kwargs: [
+            {"schema_name": "warehouse", "object_name": "products"},
+            {"schema_name": "reporting", "object_name": "products"},
+            {"schema_name": "cold storage", "object_name": "returns"},
+            {"schema_name": "warehouse", "object_name": "unrepresentable.name"},
+        ],
+    )
+    request = mssql_dataset_request("", {})
+
+    assert [r["resource_id"] for r in module._introspect(request)["resources"]] == [
+        "warehouse.products",
+        "reporting.products",
+        "cold storage.returns",
+    ]
+
+
+def test_mssql_authorizes_unicode_and_delimited_identifiers(monkeypatch) -> None:
+    module = _runtime_module()
+    queries = []
+    monkeypatch.setattr(
+        module,
+        "_invoke_toolbox",
+        lambda _cfg, _secrets, _tool, params, **_kw: queries.append(params),
+    )
+    request = mssql_dataset_request(
+        'SELECT p.价格 AS [Unit Price], p.[item]]code], p."display""name" '
+        "FROM warehouse.products AS p WHERE p.价格 > 0 ORDER BY [Unit Price]",
+        {"resource_id": "warehouse.products", "columns": ["价格", "item]code", 'display"name']},
+    )
+
+    result = module.handle_request(request)
+
+    assert result["ok"], result.get("errors")
+    assert "p.[item]]code]" in queries[0]["sql"]
+    assert "p.价格 > 0" in queries[0]["sql"]
+
+
+def test_mssql_preserves_scoped_join_aggregates_and_sort_aliases() -> None:
+    module = _runtime_module()
+    sql = (
+        "SELECT o.status AS label, SUM(CAST(o.cost AS decimal(10,2))) AS amount "
+        "FROM warehouse.orders AS o JOIN warehouse.locations AS l ON o.location = l.id "
+        "WHERE o.status = :status GROUP BY o.status ORDER BY amount DESC"
+    )
+    authorized, resources = module._validate_query_scope(
+        module._template_sql({"sql": sql}),
+        {
+            ("warehouse", "orders"): {"status", "cost", "location"},
+            ("warehouse", "locations"): {"id"},
+        },
+    )
+
+    assert "(SELECT [cost], [location], [status] FROM [warehouse].[orders]) AS [o]" in authorized
+    assert "JOIN (SELECT [id] FROM [warehouse].[locations]) AS [l]" in authorized
+    assert resources == {("warehouse", "orders"), ("warehouse", "locations")}
+    assert module._placeholder_names(authorized) == ["status"]
+
+
+@pytest.mark.parametrize("catalog", [None, "other_database"])
+def test_mssql_requires_matching_catalog_provenance_before_dispatch(monkeypatch, catalog) -> None:
+    module = _runtime_module()
+    monkeypatch.setattr(
+        module, "_invoke_toolbox", lambda *_a, **_kw: pytest.fail("provider reached")
+    )
+    request = mssql_dataset_request(
+        "SELECT sku FROM products WHERE sku = 'sample'",
+        {"resource_id": "products", "columns": ["sku"]},
+        [
+            {
+                "resource_id": "products",
+                "columns": [{"name": "sku"}],
+                "metadata": {"toolbox_schema_name": "warehouse", "toolbox_catalog_name": catalog},
+            }
+        ],
+    )
+
+    result = module.handle_request(request)
+
+    assert not result["ok"]
+    assert result["errors"][0]["code"] == "invalid_config"
+    assert (
+        "Refresh schema inspection and reselect Dataset resources" in result["errors"][0]["message"]
+    )
+
+
+def test_mssql_requires_unambiguous_snapshot_columns_before_dispatch(monkeypatch) -> None:
+    module = _runtime_module()
+    monkeypatch.setattr(
+        module, "_invoke_toolbox", lambda *_a, **_kw: pytest.fail("provider reached")
+    )
+    request = mssql_dataset_request(
+        "SELECT sku FROM products WHERE sku = 'sample'",
+        {"resource_id": "warehouse.products", "columns": ["sku"]},
+        [
+            {
+                "resource_id": "warehouse.products",
+                "name": "products",
+                "columns": [{"name": "sku"}, {"name": " sku"}],
+                "metadata": {
+                    "toolbox_schema_name": "warehouse",
+                    "toolbox_catalog_name": "inventory",
+                },
+            }
+        ],
+    )
+
+    result = module.handle_request(request)
+
+    assert not result["ok"]
+    assert "reselect unambiguous Dataset columns" in result["errors"][0]["message"]
+
+
+def test_mssql_denied_column_stops_before_dispatch(monkeypatch) -> None:
+    module = _runtime_module()
+    monkeypatch.setattr(
+        module, "_invoke_toolbox", lambda *_a, **_kw: pytest.fail("provider reached")
+    )
+    request = mssql_dataset_request(
+        "SELECT display_name FROM warehouse.products WHERE sku = 'sample'",
+        {"resource_id": "warehouse.products", "columns": ["sku"]},
+    )
+
+    result = module.handle_request(request)
+
+    assert not result["ok"]
+    assert result["errors"][0]["code"] == "invalid_config"
+    assert "columns outside dataset scope" in result["errors"][0]["message"]
+
+
+def test_mssql_rewrites_schema_qualified_columns_for_a_restricted_source() -> None:
+    module = _runtime_module()
+    authorized, _resources = module._validate_query_scope(
+        "SELECT warehouse.products.sku FROM warehouse.products WHERE warehouse.products.sku IS NOT NULL",
+        {("warehouse", "products"): {"sku"}},
+    )
+
+    assert authorized == (
+        "SELECT [products].sku FROM (SELECT [sku] FROM [warehouse].[products]) "
+        "AS [products] WHERE [products].sku IS NOT NULL"
+    )
+
+
 def test_dataset_scope_rejects_comma_joined_resource_outside_scope() -> None:
     module = _runtime_module()
 
     with pytest.raises(ValueError, match=r"outside dataset scope: \['secret'\]"):
         module._validate_query_scope(
             "SELECT allowed.id FROM allowed, secret WHERE allowed.id = secret.id",
-            {"allowed": None},
+            {("dbo", "allowed"): None},
         )
 
 
@@ -307,7 +531,7 @@ def test_dataset_scope_preserves_schema_qualification() -> None:
     with pytest.raises(ValueError, match=r"outside dataset scope: \['secret.customers'\]"):
         module._validate_query_scope(
             "SELECT customers.id FROM secret.customers AS customers WHERE customers.id > 0",
-            {"public.customers": None, "customers": None},
+            {("public", "customers"): None},
         )
 
 
@@ -323,11 +547,11 @@ def test_read_only_validation_rejects_select_into() -> None:
     [
         (
             "SELECT a.secret FROM a JOIN b ON a.id = b.id WHERE a.id > 0",
-            {"a": {"id"}, "b": None},
+            {("dbo", "a"): {"id"}, ("dbo", "b"): None},
         ),
         (
             "SELECT b.secret FROM a JOIN b ON a.id = b.id WHERE a.id > 0",
-            {"a": None, "b": {"id"}},
+            {("dbo", "a"): None, ("dbo", "b"): {"id"}},
         ),
     ],
 )
@@ -343,7 +567,7 @@ def test_dataset_scope_ignores_string_literals_when_checking_columns() -> None:
 
     module._validate_query_scope(
         "SELECT order_id, status FROM orders WHERE status = 'open'",
-        {"orders": {"order_id", "status"}},
+        {("dbo", "orders"): {"order_id", "status"}},
     )
 
 
@@ -352,11 +576,12 @@ def test_dataset_scope_rejects_bare_wildcard_for_restricted_resource() -> None:
 
     with pytest.raises(ValueError, match="wildcard"):
         module._validate_query_scope(
-            "SELECT * FROM orders WHERE order_id > 0", {"orders": {"order_id"}}
+            "SELECT * FROM orders WHERE order_id > 0", {("dbo", "orders"): {"order_id"}}
         )
     with pytest.raises(ValueError, match="wildcard"):
         module._validate_query_scope(
-            "SELECT DISTINCT order_id, * FROM orders WHERE order_id > 0", {"orders": {"order_id"}}
+            "SELECT DISTINCT order_id, * FROM orders WHERE order_id > 0",
+            {("dbo", "orders"): {"order_id"}},
         )
 
 
@@ -490,7 +715,7 @@ def test_row_cap_ignores_limit_inside_literals_and_trailing_comments(monkeypatch
     assert calls[0]["sql"] == "SELECT 'limit' AS label FROM events WHERE id > 0 LIMIT 100"
 
 
-@offered("postgres")
+@offered("mssql")
 def test_toolbox_dataset_connector_smoke_check() -> None:
     completed = subprocess.run(  # nosemgrep: fixed Python executable and extension smoke script path. # nosec B603
         [sys.executable, str(EXTENSION_ROOT / "scripts" / "smoke_check.py")],
@@ -503,7 +728,7 @@ def test_toolbox_dataset_connector_smoke_check() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
-    assert {"customers", "orders"}.issubset(set(payload["resources"]))
+    assert {"dbo.customers", "dbo.orders"}.issubset(set(payload["resources"]))
 
 
 @pytest.mark.variant_contract
@@ -634,7 +859,7 @@ def test_toolbox_dataset_connector_uses_canonical_envelopes() -> None:
     assert payload["reload"] == []
     assert payload["errors"] == []
     snapshot = payload["result"]["schema_snapshot"]
-    orders = next(row for row in snapshot["resources"] if row["resource_id"] == "orders")
+    orders = next(row for row in snapshot["resources"] if row["resource_id"] == "dbo.orders")
     assert "indexes" in orders
     assert "constraints" in orders
     assert {"default_value", "primary_key_ordinal", "data_type", "type"}.issubset(
@@ -862,12 +1087,16 @@ def _sha256(path: Path) -> str:
 def _write_test_elf(path: Path, *, machine: int) -> str:
     # This verifier fixture needs real, framed Go metadata as well as ELF magic.
     version = b"go1.27.4"
-    modules = bytes.fromhex("3077af0c9274080241e1c107e6d618e6") + bytes.fromhex("f932433186182072008242104116d8f2")
+    modules = bytes.fromhex("3077af0c9274080241e1c107e6d618e6") + bytes.fromhex(
+        "f932433186182072008242104116d8f2"
+    )
     blob = b"\xff Go buildinf:" + bytes([8, 2]) + bytes(16)
     blob += bytes([len(version)]) + version + bytes([len(modules)]) + modules
     payload = bytearray(256)
     payload[:16] = b"\x7fELF\x02\x01\x01" + bytes(9)
-    struct.pack_into("<HHIQQQIHHHHHH", payload, 16, 2, machine, 1, 0, 64, 128, 0, 64, 56, 1, 64, 2, 0)
+    struct.pack_into(
+        "<HHIQQQIHHHHHH", payload, 16, 2, machine, 1, 0, 64, 128, 0, 64, 56, 1, 64, 2, 0
+    )
     struct.pack_into("<IIQQQQQQ", payload, 64, 1, 6, 256, 4096, 4096, len(blob), len(blob), 16)
     struct.pack_into("<IIQQQQIIQQ", payload, 192, 0, 1, 3, 4096, 256, len(blob), 0, 0, 16, 0)
     payload.extend(blob)
@@ -881,10 +1110,16 @@ def _write_test_elf(path: Path, *, machine: int) -> str:
         (EXTENSION_ROOT / "scripts/native-security-baseline.json").read_bytes()
     )
     provenance_path = fixture_root / "toolbox-provenance.json"
-    provenance = json.loads(provenance_path.read_text()) if provenance_path.exists() else {"binaries": {}}
+    provenance = (
+        json.loads(provenance_path.read_text()) if provenance_path.exists() else {"binaries": {}}
+    )
     provenance["binaries"][path.parent.name] = {
-        "go_version": version.decode(), "modules": {}, "module_gaps": [], "module_replacements": {},
-        "sha256": checksum, "size": len(payload),
+        "go_version": version.decode(),
+        "modules": {},
+        "module_gaps": [],
+        "module_replacements": {},
+        "sha256": checksum,
+        "size": len(payload),
     }
     provenance_path.write_text(json.dumps(provenance))
     return checksum
@@ -1404,21 +1639,12 @@ def test_introspection_normalizes_json_encoded_toolbox_object_details(monkeypatc
         },
     )
 
-    snapshot = module._introspect(  # type: ignore[attr-defined]
-        {
-            "action": {
-                "input": {
-                    "connection_config": toolbox_postgres_config(),
-                    "secret_refs": {"values": {"password": "transport-fixture-value"}},
-                }
-            }
-        }
-    )
+    snapshot = module._introspect(mssql_dataset_request("", {}))
 
     assert snapshot["metadata"]["resource_count"] == 1
     assert snapshot["resources"] == [
         {
-            "resource_id": "orders",
+            "resource_id": "warehouse.orders",
             "name": "orders",
             "resource_type": "TABLE",
             "selectable": True,
@@ -1447,6 +1673,7 @@ def test_introspection_normalizes_json_encoded_toolbox_object_details(monkeypatc
             ],
             "constraints": {"primary_key": []},
             "metadata": {
+                "toolbox_catalog_name": "inventory",
                 "toolbox_schema_name": "warehouse",
                 "toolbox_object_type": "TABLE",
             },
@@ -2008,7 +2235,7 @@ def test_every_final_scope_owner_introspects_through_the_entrypoint(scope) -> No
     assert completed.returncode == 0, completed.stderr or completed.stdout
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
-    assert "orders" in {row["resource_id"] for row in payload["result"]["resources"]}
+    assert "dbo.orders" in {row["resource_id"] for row in payload["result"]["resources"]}
 
 
 @pytest.mark.parametrize(
@@ -2097,7 +2324,9 @@ def test_logo_is_a_square_png_within_the_host_limits() -> None:
 
 
 def test_toolbox_launch_disables_startup_version_network_check(monkeypatch):
-    spec = importlib.util.spec_from_file_location("toolbox_launch_check", EXTENSION_ROOT / "main.py")
+    spec = importlib.util.spec_from_file_location(
+        "toolbox_launch_check", EXTENSION_ROOT / "main.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "_validate_connection_credentials", lambda *args: None)
@@ -2105,10 +2334,14 @@ def test_toolbox_launch_disables_startup_version_network_check(monkeypatch):
     monkeypatch.setattr(module, "_toolbox_command", lambda *args: ["/packaged/toolbox"])
     monkeypatch.setattr(module, "_toolbox_env", lambda *args: {})
     commands = []
+
     def launch(argv, **kwargs):
         commands.append(argv)
         raise RuntimeError("captured launch")
+
     monkeypatch.setattr(module.subprocess, "Popen", launch)
     with pytest.raises(RuntimeError, match="captured launch"):
         module._invoke_toolbox({}, {}, "query")
-    assert commands == [["/packaged/toolbox", "--prebuilt=approved-profile", "--stdio", "--disable-version-check"]]
+    assert commands == [
+        ["/packaged/toolbox", "--prebuilt=approved-profile", "--stdio", "--disable-version-check"]
+    ]
