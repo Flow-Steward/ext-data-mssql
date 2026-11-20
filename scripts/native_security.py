@@ -4,6 +4,7 @@
 ELF build-info decoding follows Go debug/buildinfo and the catalog inventory.
 No native executable is run by this module.
 """
+
 from __future__ import annotations
 import argparse
 import hashlib
@@ -11,31 +12,24 @@ import json
 import re
 import struct
 from pathlib import Path
+
 MAX_METADATA = 1024 * 1024
 MAGIC = b"\xff Go buildinf:"
 START = bytes.fromhex("3077af0c9274080241e1c107e6d618e6")
 END = bytes.fromhex("f932433186182072008242104116d8f2")
+
 
 def _buildinfo(data):
     if len(data) < 64 or data[:4] != b"\x7fELF":
         raise ValueError("non-Go native file cannot be inspected")
     order = "<" if data[5] == 1 else ">"
     phoff, shoff = struct.unpack_from(order + "QQ", data, 32)
-    phsize, phnum, shsize, shnum, strindex = struct.unpack_from(
-        order + "HHHHH", data, 54
-    )
-    if (
-        phnum > 4096
-        or shnum > 4096
-        or (phnum and phsize != 56)
-        or (shnum and shsize != 64)
-    ):
+    phsize, phnum, shsize, shnum, strindex = struct.unpack_from(order + "HHHHH", data, 54)
+    if phnum > 4096 or shnum > 4096 or (phnum and phsize != 56) or (shnum and shsize != 64):
         raise ValueError("unsupported ELF header table")
     sections = []
     for index in range(shnum):
-        sections.append(
-            struct.unpack_from(order + "IIQQQQIIQQ", data, shoff + index * shsize)
-        )
+        sections.append(struct.unpack_from(order + "IIQQQQIIQQ", data, shoff + index * shsize))
     regions = []
     if sections and strindex < len(sections):
         strings = sections[strindex]
@@ -115,9 +109,9 @@ def _modules(content, gaps, source, replacements=None):
     for name, version, replaced, kind in records:
         if kind == "mod" and version == "(devel)" and not replaced:
             continue
-        if not re.fullmatch(
-            r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.+-]+)?", version
-        ) or name.startswith((".", "/")):
+        if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.+-]+)?", version) or name.startswith(
+            (".", "/")
+        ):
             gaps.append(
                 f"{source}: local/unversioned Go replacement or module {name} cannot be version-checked"
             )
@@ -131,22 +125,34 @@ def _modules(content, gaps, source, replacements=None):
 def inspect_binary(path: Path) -> dict:
     blob = path.read_bytes()
     toolchain, text = _buildinfo(blob)
-    gaps, replacements = [], {}
+    gaps: list[str] = []
+    replacements: dict[str, dict[str, str]] = {}
     modules = dict(_modules(text, gaps, str(path), replacements))
-    return {"go_version": toolchain, "modules": modules, "module_gaps": gaps,
-            "module_replacements": replacements,
-            "sha256": hashlib.sha256(blob).hexdigest(), "size": len(blob)}
+    return {
+        "go_version": toolchain,
+        "modules": modules,
+        "module_gaps": gaps,
+        "module_replacements": replacements,
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        "size": len(blob),
+    }
 
 
 def check_floors(record: dict, baseline: dict) -> None:
     def numeric(value: str) -> tuple:
-        match = re.fullmatch(r"(?:go|v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:[+][0-9A-Za-z.-]+)?", value)
+        match = re.fullmatch(
+            r"(?:go|v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:[+][0-9A-Za-z.-]+)?", value
+        )
         if not match:
             raise ValueError(f"unsupported version: {value}")
         pre = match.group(4)
-        identifiers = tuple((0, int(item)) if item.isdigit() else (1, item)
-                            for item in pre.split(".")) if pre else ()
+        identifiers = (
+            tuple((0, int(item)) if item.isdigit() else (1, item) for item in pre.split("."))
+            if pre
+            else ()
+        )
         return (*map(int, match.groups()[:3]), 0 if pre else 1, identifiers)
+
     if record["go_version"] != baseline["go_version"]:
         raise ValueError(f"toolchain differs from reviewed compiler: {record['go_version']}")
     for name, floor in baseline["modules"].items():
@@ -163,12 +169,15 @@ def check_floors(record: dict, baseline: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
-    parser.add_argument("--baseline", type=Path, default=Path(__file__).with_name("native-security-baseline.json"))
+    parser.add_argument(
+        "--baseline", type=Path, default=Path(__file__).with_name("native-security-baseline.json")
+    )
     args = parser.parse_args()
     record = inspect_binary(args.binary)
     check_floors(record, json.loads(args.baseline.read_text()))
     print(json.dumps(record, indent=2, sort_keys=True))
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

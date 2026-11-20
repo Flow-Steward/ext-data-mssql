@@ -52,8 +52,13 @@ def main():
         ),
         "security_baseline": baseline,
         "build_identities": json.loads((ROOT / "scripts/native-build-identities.json").read_text()),
-        "approved_profiles": json.loads((ROOT / "scripts/approved-profile-baseline.json").read_text()),
-        "patches": {path.relative_to(ROOT).as_posix(): digest(path) for path in sorted((ROOT / "scripts/patches").glob("*.patch"))},
+        "approved_profiles": json.loads(
+            (ROOT / "scripts/approved-profile-baseline.json").read_text()
+        ),
+        "patches": {
+            path.relative_to(ROOT).as_posix(): digest(path)
+            for path in sorted((ROOT / "scripts/patches").glob("*.patch"))
+        },
         "binaries": records,
     }
     (ROOT / "toolbox-provenance.json").write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

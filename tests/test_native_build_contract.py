@@ -12,7 +12,12 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATED = ("toolbox-provenance.json", "SHA256SUMS", "packages.txt", "scripts/go-toolchain-selected.json")
+GENERATED = (
+    "toolbox-provenance.json",
+    "SHA256SUMS",
+    "packages.txt",
+    "scripts/go-toolchain-selected.json",
+)
 
 
 def load_script(name):
@@ -29,7 +34,9 @@ def fixture_binary(path, machine):
     blob += bytes([len(version)]) + version + bytes([len(modules)]) + modules
     payload = bytearray(256)
     payload[:16] = b"\x7fELF\x02\x01\x01" + bytes(9)
-    struct.pack_into("<HHIQQQIHHHHHH", payload, 16, 2, machine, 1, 0, 64, 128, 0, 64, 56, 1, 64, 2, 0)
+    struct.pack_into(
+        "<HHIQQQIHHHHHH", payload, 16, 2, machine, 1, 0, 64, 128, 0, 64, 56, 1, 64, 2, 0
+    )
     struct.pack_into("<IIQQQQQQ", payload, 64, 1, 6, 256, 4096, 4096, len(blob), len(blob), 16)
     struct.pack_into("<IIQQQQIIQQ", payload, 192, 0, 1, 3, 4096, 256, len(blob), 0, 0, 16, 0)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,7 +47,9 @@ def fixture_binary(path, machine):
 def native_fixture(tmp_path, monkeypatch):
     root = tmp_path / "extension"
     root.mkdir()
-    shutil.copytree(ROOT / "scripts", root / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(
+        ROOT / "scripts", root / "scripts", ignore=shutil.ignore_patterns("__pycache__")
+    )
     for name in ("LICENSE", "NOTICE", "extension.yaml", "variant.json"):
         shutil.copy2(ROOT / name, root / name)
     sources = json.loads((root / "scripts/go-toolchain-sources.json").read_text())
@@ -118,8 +127,12 @@ def test_committed_build_identities_match_reviewed_patches_and_module_floors():
     patches = list((ROOT / "scripts/patches").glob("*.patch"))
     security_patch = next(path for path in patches if "security" in path.name)
     profile_patch = next(path for path in patches if "profile" in path.name)
-    assert identity["module_patch_sha256"] == hashlib.sha256(security_patch.read_bytes()).hexdigest()
-    assert identity["profile_patch_sha256"] == hashlib.sha256(profile_patch.read_bytes()).hexdigest()
+    assert (
+        identity["module_patch_sha256"] == hashlib.sha256(security_patch.read_bytes()).hexdigest()
+    )
+    assert (
+        identity["profile_patch_sha256"] == hashlib.sha256(profile_patch.read_bytes()).hexdigest()
+    )
     baseline = json.loads((ROOT / "scripts/native-security-baseline.json").read_text())
     third_party = yaml.safe_load((ROOT / "THIRD_PARTY.yml").read_text())
     build = third_party["build"]

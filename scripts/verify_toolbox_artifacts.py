@@ -122,7 +122,14 @@ def main() -> int:
             check_floors(record, baseline)
             provenance = json.loads((root / "toolbox-provenance.json").read_text())
             actual = provenance["binaries"][relative.split("/")[1]]
-            for key in ("go_version", "modules", "module_gaps", "module_replacements", "sha256", "size"):
+            for key in (
+                "go_version",
+                "modules",
+                "module_gaps",
+                "module_replacements",
+                "sha256",
+                "size",
+            ):
                 if actual.get(key) != record[key]:
                     failures.append(f"provenance {key} differs from binary: {relative}")
         except (ValueError, OSError, KeyError, struct.error) as exc:
