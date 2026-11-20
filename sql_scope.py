@@ -153,7 +153,7 @@ def sql_tokens(sql: str) -> list[Token]:
 
 
 def strip_comments(sql: str) -> str:
-    chunks = []
+    chunks: list[str] = []
     start = 0
     for token in sql_tokens(sql):
         if token.kind == "comment":
@@ -252,6 +252,7 @@ class SelectScope:
         if explicit_alias:
             end += 1
         alias = self.tokens[end] if end < len(self.tokens) else None
+        keys: list[tuple[str, ...]]
         if (
             alias is not None
             and alias.kind in _NAME_KINDS
@@ -494,10 +495,10 @@ class SelectScope:
             # from the scope check. A constant keeps COUNT(*) useful on its own.
             projection = columns or "1 AS [_flowsteward_row]"
             qualified = ".".join(quoted_name(name) for name in relation)
-            self.replacements.append(
-                (start, end, f"(SELECT {projection} FROM {qualified}) AS {quoted_name(alias)}")
-            )
-        chunks = []
+            # Interpolations contain only bracket-escaped identifiers or the fixed fallback.
+            source_sql = f"(SELECT {projection} FROM {qualified}) AS {quoted_name(alias)}"  # nosec B608
+            self.replacements.append((start, end, source_sql))
+        chunks: list[str] = []
         cursor = 0
         for start, end, replacement in sorted(self.replacements):
             chunks.extend((sql[cursor:start], replacement))
