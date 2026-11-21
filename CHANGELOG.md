@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.14
+
+- Refresh the locked Go dependency graph and rebuild the Linux AMD64 and ARM64 Toolbox payloads.
+- Update the Microsoft SQL Server driver to v1.12.0.
+
 ## 1.3.13
 
 - Limit extension requests to 2 MiB before UTF-8 decoding or JSON parsing.
